@@ -46,5 +46,5 @@ export function TerminalView({ onReady }: Props) {
     }
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+  return <div ref={containerRef} className="terminal-container" />
 }

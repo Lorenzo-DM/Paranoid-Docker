@@ -63,7 +63,7 @@ export function RollbacksModal({ containerId, containerName, onClose }: Props) {
                     </Anchor>
                   </Table.Td>
                   <Table.Td>
-                    <Text size="xs" style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                    <Text size="xs" ff="monospace" className="word-break-all">
                       {f.previous_image}
                     </Text>
                   </Table.Td>

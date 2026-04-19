@@ -11,7 +11,7 @@ export function UpdateBadge({ updateAvailable }: Props) {
   
   return (
     <span className="pill warn">
-      <IconArrowUp size={12} style={{ marginRight: 4 }} />
+      <IconArrowUp size={12} className="icon-mr" />
       Update available
     </span>
   )

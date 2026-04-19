@@ -60,7 +60,7 @@ function StackRow({
         <td className="col-check" onClick={e => e.stopPropagation()}>
           <GlassCheck checked={selected} onChange={onToggle} />
         </td>
-        <td style={{ width: 40 }}>
+        <td className="col-expand">
           <button className="btn tiny ghost" onClick={e => { e.stopPropagation(); setExpanded(v => !v) }}>
             {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
           </button>
@@ -78,7 +78,7 @@ function StackRow({
         </td>
 
         <td className="col-actions" onClick={e => e.stopPropagation()}>
-          <div className="row" style={{ justifyContent: 'flex-end', gap: 4 }}>
+          <div className="row justify-end gap-xs">
 
             <div className="split-btn">
               <button className="btn tiny primary" onClick={() => onUpdate(stack.name)}>
@@ -94,7 +94,7 @@ function StackRow({
                   </Menu.Item>
                   <Menu.Divider />
                   <Menu.Item
-                    leftSection={<><IconDeviceFloppy size={12} style={{ marginRight: 1 }} /><IconRefresh size={12} /></>}
+                    leftSection={<><IconDeviceFloppy size={12} className="icon-mr-xs" /><IconRefresh size={12} /></>}
                     onClick={() => onSaveAndUpdate(stack.name)}
                   >
                     Save + Update
@@ -143,13 +143,13 @@ function StackRow({
 
       {expanded && (
         <tr>
-          <td colSpan={7} style={{ padding: 0 }}>
+          <td colSpan={7} className="expand-cell">
             <Collapse expanded={expanded}>
-              <Box p="md" style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--line)' }}>
+              <Box p="md" className="expand-content">
                 <Stack gap="xs">
                   <ServicesTable services={stack.services} />
                   {stack.config_files?.length > 1 && (
-                    <div className="row" style={{ gap: 8 }}>
+                    <div className="row">
                       <IconFile size={12} className="muted" />
                       {stack.config_files.slice(1).map(f => (
                         <span key={f} className="mono tiny muted">{f}</span>
@@ -209,16 +209,15 @@ export function StackTable({ stacks, loading, error, onUpdate, onLogs, onRollbac
   }
 
   return (
-    <div className="col" style={{ gap: 16 }}>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <div className="row" style={{ position: 'relative' }}>
-          <IconSearch size={14} className="muted" style={{ position: 'absolute', left: 10 }} />
+    <div className="col gap-lg">
+      <div className="row justify-between">
+        <div className="row search-wrap">
+          <IconSearch size={14} className="muted search-icon" />
           <input
-            className="search"
+            className="search search-with-icon"
             placeholder="Search stacks or services..."
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            style={{ paddingLeft: 32 }}
           />
         </div>
         {someSelected && (
@@ -239,7 +238,7 @@ export function StackTable({ stacks, loading, error, onUpdate, onLogs, onRollbac
               <th className="col-check">
                 <GlassCheck checked={allSelected} indeterminate={someSelected && !allSelected} onChange={toggleAll} />
               </th>
-              <th style={{ width: 40 }} />
+              <th className="col-expand" />
               <SortHeader label="Stack" field="name" sort={sort} onSort={onSort} />
               <SortHeader label="Update" field="update_available" sort={sort} onSort={onSort} />
               <th>Services</th>
@@ -254,7 +253,7 @@ export function StackTable({ stacks, loading, error, onUpdate, onLogs, onRollbac
               ))
             ) : filteredStacks.length === 0 ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: 40 }} className="muted">
+                <td colSpan={7} className="muted empty-cell">
                   {filter ? `No stacks match "${filter}"` : 'No compose stacks found'}
                 </td>
               </tr>

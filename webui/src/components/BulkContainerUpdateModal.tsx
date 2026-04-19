@@ -130,7 +130,7 @@ export function BulkContainerUpdateModal({ containers, onClose }: Props) {
         </Box>
 
         {currentLogs.length > 0 && (
-          <ScrollArea h={100} type="auto" style={{ background: 'var(--mantine-color-dark-8)', borderRadius: 4 }}>
+          <ScrollArea h={100} type="auto" className="bulk-logs-scroll">
             <Box p="xs">
               {currentLogs.map((line, i) => (
                 <Text key={i} size="xs" ff="monospace" c="dimmed">{line}</Text>

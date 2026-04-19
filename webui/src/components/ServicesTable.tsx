@@ -8,14 +8,14 @@ interface Props {
 
 export function ServicesTable({ services }: Props) {
   return (
-    <div className="tbl-shell" style={{ margin: 0, border: 'none', background: 'transparent', boxShadow: 'none' }}>
-      <table className="wtable" style={{ fontSize: '12px' }}>
+    <div className="tbl-shell tbl-shell-inline">
+      <table className="wtable wtable-sm">
         <thead>
           <tr>
-            <th style={{ background: 'transparent' }}>Service</th>
-            <th style={{ background: 'transparent' }}>Image</th>
-            <th style={{ background: 'transparent' }}>State</th>
-            <th style={{ background: 'transparent' }}>Ports</th>
+            <th className="th-transparent">Service</th>
+            <th className="th-transparent">Image</th>
+            <th className="th-transparent">State</th>
+            <th className="th-transparent">Ports</th>
           </tr>
         </thead>
         <tbody>

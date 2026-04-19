@@ -68,7 +68,7 @@ function App() {
 
         {containers.length > 0 && (
           <>
-            <div className="title-wrap" style={{ marginTop: '40px' }}>
+            <div className="title-wrap standalone-title">
               <h1>Standalone containers</h1>
               <span className="sub">Not managed by compose</span>
             </div>

@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useContext, createContext } from 'react';
+import { Progress } from '@mantine/core';
 
 export function GlassCheck({ checked, indeterminate, onChange }: { checked: boolean; indeterminate?: boolean; onChange?: (val: boolean) => void }) {
   return (
@@ -58,20 +59,20 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       <div className="toast-wrap">
         {toasts.map(t => (
           <div key={t.id} className="toast">
-            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
-                  {t.kind === 'success' && <span style={{ color: 'var(--ok)', marginRight: 6 }}>✓</span>}
-                  {t.kind === 'error' && <span style={{ color: 'var(--danger)', marginRight: 6 }}>✕</span>}
-                  {t.kind === 'info' && <span style={{ color: 'var(--accent-2)', marginRight: 6 }}>↻</span>}
+            <div className="row toast-row">
+              <div className="toast-body">
+                <div className="toast-title">
+                  {t.kind === 'success' && <span className="toast-icon toast-icon-ok">✓</span>}
+                  {t.kind === 'error' && <span className="toast-icon toast-icon-danger">✕</span>}
+                  {t.kind === 'info' && <span className="toast-icon toast-icon-info">↻</span>}
                   {t.title}
                 </div>
-                {t.body && <div className="tiny muted" style={{ marginTop: 3 }}>{t.body}</div>}
+                {t.body && <div className="tiny muted toast-body-text">{t.body}</div>}
                 {typeof t.progress === 'number' && (
-                  <div className="progress"><div style={{ width: `${t.progress}%` }} /></div>
+                  <Progress value={t.progress} size="xs" mt={8} />
                 )}
               </div>
-              <button className="btn ghost tiny" onClick={() => dismiss(t.id)} style={{ padding: '0 4px', fontSize: 16, color: 'var(--ink-3)' }}>×</button>
+              <button className="btn ghost tiny toast-dismiss" onClick={() => dismiss(t.id)}>×</button>
             </div>
           </div>
         ))}
@@ -89,14 +90,14 @@ export function useToast() {
 
 export type SortOrder = { field: string; dir: 'asc' | 'desc' };
 
-export function SortHeader({ label, field, sort, onSort, align = 'left', width }: {
-  label: string; field: string; sort: SortOrder; onSort: (field: string) => void; align?: 'left' | 'center' | 'right'; width?: number | string
+export function SortHeader({ label, field, sort, onSort, align = 'left', className }: {
+  label: string; field: string; sort: SortOrder; onSort: (field: string) => void; align?: 'left' | 'center' | 'right'; className?: string
 }) {
   const active = sort.field === field;
+  const alignCls = align !== 'left' ? `text-${align}` : '';
   return (
     <th
-      className={`sortable ${active ? 'active-sort' : ''}`}
-      style={{ textAlign: align, width }}
+      className={`sortable ${active ? 'active-sort' : ''} ${alignCls} ${className ?? ''}`}
       onClick={() => onSort(field)}
     >
       {label}

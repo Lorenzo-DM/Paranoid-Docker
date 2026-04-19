@@ -14,13 +14,7 @@ export function PullProgressLog({ lines }: Props) {
 
   return (
     <ScrollArea h={260} type="auto" className="glass-inset" p="xs">
-      <div style={{ 
-        fontFamily: 'var(--mono)', 
-        fontSize: '12px', 
-        whiteSpace: 'pre-wrap', 
-        color: 'var(--ink-2)',
-        minHeight: '240px' 
-      }}>
+      <div className="pull-log-output">
         {lines.join('\n') || 'Waiting for output...'}
       </div>
       <div ref={bottomRef} />
