@@ -71,12 +71,14 @@ Env vars in `docker-compose.yaml`:
 | `TZ` | `Europe/Rome` | Timezone |
 | `LISTEN_ADDR` | `:1323` | Server bind address |
 | `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS origins (comma-separated) |
+| `COMPOSE_STACKS_DIR` | *(not set)* | Host path to compose stacks directory (optional) |
 
 #### Volumes
 
 - `/var/run/docker.sock` — Docker daemon socket (read-only)
 - `rollbacks/` — Rollback snapshots (named volume)
 - `images/` — Saved image tarballs (named volume)
+- `COMPOSE_STACKS_DIR` — (optional) Mount your compose stacks directory for file-based rollbacks and native `docker compose` updates. Without it, rollbacks and updates use `docker inspect` data only. To enable, uncomment the volume line in `docker-compose.yaml` and set `COMPOSE_STACKS_DIR`
 
 ## API
 

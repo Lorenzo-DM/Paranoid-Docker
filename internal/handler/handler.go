@@ -74,6 +74,9 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	api.GET("/containers/:id/save-status", h.SaveStatus)
 	api.GET("/images", h.ListSavedImages)
 	api.GET("/images/:filename", h.DownloadImage)
+
+	api.GET("/capabilities", h.GetCapabilities)
+	api.POST("/rollback-mode", h.SetRollbackMode)
 }
 
 
@@ -470,6 +473,27 @@ func (h *Handler) DownloadImage(c *echo.Context) error {
 }
 
 
+
+func (h *Handler) GetCapabilities(c *echo.Context) error {
+	caps := h.composeService.GetCapabilities(c.Request().Context())
+	return c.JSON(http.StatusOK, caps)
+}
+
+type rollbackModeRequest struct {
+	Mode string `json:"mode"`
+}
+
+func (h *Handler) SetRollbackMode(c *echo.Context) error {
+	var req rollbackModeRequest
+	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
+	if req.Mode != "auto" && req.Mode != "compose" && req.Mode != "inspect" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "mode must be auto, compose, or inspect"})
+	}
+	h.composeService.SetRollbackMode(req.Mode)
+	return c.JSON(http.StatusOK, map[string]string{"mode": req.Mode})
+}
 
 func (h *Handler) containerNameFromID(c *echo.Context, id string) (string, error) {
 	containers, err := h.containerService.GetAll(c.Request().Context())
