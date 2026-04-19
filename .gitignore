@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.claude
+rollbacks/
+images/
+
+.env
+.env.local
+.env.production
+.env.development
