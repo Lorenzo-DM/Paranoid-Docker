@@ -1,0 +1,18 @@
+services:
+  paranoid-docker-update:
+    image: ghcr.io/lorenzo-dm/paranoid-docker:latest
+    container_name: paranoid-docker-update
+    restart: unless-stopped
+    ports:
+      - "1323:1323"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - rollbacks:/app/rollbacks
+      - images:/app/images
+    environment:
+      - TZ=Europe/Rome
+      - LISTEN_ADDR=:1323
+
+volumes:
+  rollbacks:
+  images:
