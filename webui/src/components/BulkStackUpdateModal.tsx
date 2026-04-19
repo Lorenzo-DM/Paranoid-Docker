@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Modal, Stack, Text, ScrollArea, Group, ThemeIcon, Box, Loader } from '@mantine/core'
+import { Modal, Stack, Text, ScrollArea, Group, ThemeIcon, Box, Loader, Progress } from '@mantine/core'
 import { IconCheck, IconX, IconMinus } from '@tabler/icons-react'
 import { triggerStackUpdate, createStackUpdateEventSource } from '../api/containers'
 import { getRollbackIncludeEnv } from '../settings'
@@ -110,13 +110,11 @@ export function BulkStackUpdateModal({ stackNames, onClose }: Props) {
       closeOnEscape={finished}
     >
       <Stack>
-        <div className="progress">
-          <div style={{ width: `${progress}%`, transition: 'width 0.3s' }} />
-        </div>
+        <Progress value={progress} size="xs" />
 
         <Box className="glass-inset" p="xs">
           {items.map(item => (
-            <Group key={item.name} gap="xs" py={4} wrap="nowrap" style={{ borderBottom: '1px solid var(--line)', lastChild: { borderBottom: 'none' } }}>
+            <Group key={item.name} gap="xs" py={4} wrap="nowrap" className="bulk-item">
               <StatusIcon status={item.status} />
               <Text size="sm" ff="monospace" flex={1} c="var(--ink-2)">{item.name}</Text>
               {item.error && <Text size="xs" c="var(--danger)" lineClamp={1}>{item.error}</Text>}

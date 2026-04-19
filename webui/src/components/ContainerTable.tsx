@@ -68,16 +68,15 @@ export function ContainerTable({ containers, loading, error, onUpdate, onLogs, o
   }
 
   return (
-    <div className="col" style={{ gap: 16 }}>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <div className="row" style={{ position: 'relative' }}>
-          <IconSearch size={14} className="muted" style={{ position: 'absolute', left: 10 }} />
-          <input 
-            className="search" 
-            placeholder="Search standalone containers..." 
-            value={filter} 
+    <div className="col gap-lg">
+      <div className="row justify-between">
+        <div className="row search-wrap">
+          <IconSearch size={14} className="muted search-icon" />
+          <input
+            className="search search-with-icon"
+            placeholder="Search standalone containers..."
+            value={filter}
             onChange={e => setFilter(e.target.value)}
-            style={{ paddingLeft: 32 }}
           />
         </div>
         
@@ -120,7 +119,7 @@ export function ContainerTable({ containers, loading, error, onUpdate, onLogs, o
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ textAlign: 'center', padding: 40 }} className="muted">
+                <td colSpan={6} className="muted empty-cell">
                   {filter ? `No containers match "${filter}"` : 'No standalone containers found'}
                 </td>
               </tr>
@@ -150,7 +149,7 @@ export function ContainerTable({ containers, loading, error, onUpdate, onLogs, o
                     </td>
                     <td className="muted tiny">{ports || '—'}</td>
                     <td className="col-actions" onClick={e => e.stopPropagation()}>
-                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                      <div className="row justify-end">
                         <button className="btn tiny primary" onClick={() => onUpdate(c.id, c.name)} disabled={c.state !== 'running'}>
                           <IconRefresh size={14} />
                           Update

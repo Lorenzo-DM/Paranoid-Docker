@@ -33,7 +33,7 @@ export function LogsModal({ containerId, containerName, onClose }: Props) {
       onClose={onClose}
       title={`Logs: ${containerName}`}
       size="xl"
-      styles={{ body: { height: '60vh', padding: 0 } }}
+      classNames={{ body: 'modal-logs-body' }}
     >
       <TerminalView
         onReady={(write) => {

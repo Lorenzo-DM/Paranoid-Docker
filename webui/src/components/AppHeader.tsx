@@ -26,7 +26,7 @@ export function AppHeader({ onRefresh }: Props) {
       <Group gap="xs">
         <Tooltip label="Refresh">
           <button className="btn small ghost" onClick={onRefresh}>
-            <IconRefresh size={18} style={{ marginRight: 4 }} />
+            <IconRefresh size={18} className="icon-mr" />
             Refresh
           </button>
         </Tooltip>
@@ -38,7 +38,7 @@ export function AppHeader({ onRefresh }: Props) {
             </Tooltip>
           </Popover.Target>
           <Popover.Dropdown>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+            <label className="settings-label">
               <input
                 type="checkbox"
                 checked={includeEnv}

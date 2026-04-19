@@ -29,7 +29,7 @@ export function StackLogsModal({ stackName, onClose }: Props) {
       onClose={onClose}
       title={`Logs: ${stackName}`}
       size="xl"
-      styles={{ body: { height: '60vh', padding: 0 } }}
+      classNames={{ body: 'modal-logs-body' }}
     >
       <TerminalView onReady={(write) => { writeRef.current = write }} />
     </Modal>
