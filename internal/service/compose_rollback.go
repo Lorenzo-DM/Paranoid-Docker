@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ func WriteStackRollback(
 	stack model.ComposeStack,
 	repo repository.ContainerRepository,
 	includeEnv bool,
+	mode string,
 ) (string, error) {
 	now := time.Now().UTC()
 	ts := now.Format("2006-01-02T15-04-05")
@@ -27,74 +29,190 @@ func WriteStackRollback(
 		return "", fmt.Errorf("mkdir rollback dir: %w", err)
 	}
 
+	if mode == "compose" {
+		return writeRollbackFromComposeConfig(ctx, stack, dir, now)
+	}
+	return writeRollbackFromInspect(ctx, stack, repo, includeEnv, dir, now)
+}
+
+func configFileAccessible(configFiles []string) bool {
+	if len(configFiles) == 0 {
+		return false
+	}
+	_, err := os.Stat(configFiles[0])
+	return err == nil
+}
+
+func writeRollbackFromComposeConfig(
+	ctx context.Context,
+	stack model.ComposeStack,
+	dir string,
+	now time.Time,
+) (string, error) {
+	args := []string{"compose"}
+	for _, f := range stack.ConfigFiles {
+		args = append(args, "-f", f)
+	}
+	args = append(args, "config")
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if stack.WorkingDir != "" {
+		cmd.Dir = stack.WorkingDir
+	}
+	data, err := cmd.Output()
+	if err != nil {
+		return dir, fmt.Errorf("docker compose config: %w", err)
+	}
+
 	pinned := buildPinnedImages(stack)
-
-	var envMap map[string][]string
-	if includeEnv {
-		envMap = buildServiceEnvMap(ctx, stack, repo)
+	patched, err := patchComposeImages(data, pinned)
+	if err != nil {
+		patched = data
 	}
 
-	for _, configPath := range stack.ConfigFiles {
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			return dir, fmt.Errorf("read %s: %w", configPath, err)
-		}
+	header := fmt.Sprintf(
+		"# Rollback for stack: %s\n# Generated: %s\n# Source: docker compose config\n\n",
+		stack.Name, now.Format(time.RFC3339),
+	)
 
-		patched, err := patchComposeFile(data, pinned, envMap)
-		if err != nil {
-			patched = data
-		}
-
-		header := fmt.Sprintf(
-			"# Rollback for stack: %s\n# Generated: %s\n# Original: %s\n\n",
-			stack.Name, now.Format(time.RFC3339), configPath,
-		)
-
-		destName := filepath.Base(configPath)
-		destPath := filepath.Join(dir, destName)
-		if err := os.WriteFile(destPath, append([]byte(header), patched...), 0o644); err != nil {
-			return dir, fmt.Errorf("write rollback file: %w", err)
-		}
+	destPath := filepath.Join(dir, "docker-compose.yaml")
+	if err := os.WriteFile(destPath, append([]byte(header), patched...), 0o644); err != nil {
+		return dir, fmt.Errorf("write rollback file: %w", err)
 	}
-
 	return dir, nil
 }
 
-func buildServiceEnvMap(ctx context.Context, stack model.ComposeStack, repo repository.ContainerRepository) map[string][]string {
-	result := make(map[string][]string)
+func writeRollbackFromInspect(
+	ctx context.Context,
+	stack model.ComposeStack,
+	repo repository.ContainerRepository,
+	includeEnv bool,
+	dir string,
+	now time.Time,
+) (string, error) {
+	cf := composeFile{
+		Services: make(map[string]composeService, len(stack.Services)),
+	}
+	allNetworks := map[string]composeNetwork{}
+	allVolumes := map[string]composeVolume{}
+
 	for _, svc := range stack.Services {
 		if svc.ContainerID == "" {
 			continue
 		}
+
 		inspect, err := repo.InspectContainer(ctx, svc.ContainerID)
-		if err == nil && inspect.Config != nil {
-			result[svc.Name] = inspect.Config.Env
+		if err != nil {
+			return dir, fmt.Errorf("inspect %s: %w", svc.Name, err)
+		}
+
+		cfg := captureContainerConfig(inspect)
+		pinnedImage := pinImageDigest(svc.Image, svc.LocalDigest)
+
+		var env []string
+		if includeEnv {
+			env = cfg.Env
+		}
+
+		cs := composeService{
+			Image:         pinnedImage,
+			ContainerName: cfg.Name,
+			Restart:       restartPolicyName(string(cfg.RestartPolicy.Name)),
+			Environment:   env,
+			Networks:      cfg.Networks,
+		}
+
+		for port, bindings := range cfg.PortBindings {
+			for _, b := range bindings {
+				if b.HostPort != "" {
+					cs.Ports = append(cs.Ports, fmt.Sprintf("%s:%s/%s", b.HostPort, port.Port(), port.Proto()))
+				}
+			}
+		}
+
+		cs.Volumes = append(cs.Volumes, cfg.Binds...)
+
+		for _, m := range cfg.Mounts {
+			if m.Type == "volume" && m.Name != "" {
+				cs.Volumes = append(cs.Volumes, fmt.Sprintf("%s:%s", m.Name, m.Destination))
+				allVolumes[m.Name] = composeVolume{External: true}
+			}
+		}
+
+		labels := map[string]string{}
+		for k, v := range cfg.Labels {
+			if !strings.HasPrefix(k, "com.docker.compose.") {
+				labels[k] = v
+			}
+		}
+		if len(labels) > 0 {
+			cs.Labels = labels
+		}
+
+		for _, n := range cfg.Networks {
+			allNetworks[n] = composeNetwork{External: true}
+		}
+
+		cf.Services[svc.Name] = cs
+	}
+
+	if len(allNetworks) > 0 {
+		cf.Networks = allNetworks
+	}
+	if len(allVolumes) > 0 {
+		cf.Volumes = allVolumes
+	}
+
+	data, err := yaml.Marshal(cf)
+	if err != nil {
+		return dir, fmt.Errorf("marshal compose: %w", err)
+	}
+
+	var imageList []string
+	for name, s := range cf.Services {
+		imageList = append(imageList, fmt.Sprintf("#   %s: %s", name, s.Image))
+	}
+
+	header := fmt.Sprintf(
+		"# Rollback for stack: %s\n# Generated: %s\n# Source: docker inspect\n# Services:\n%s\n\n",
+		stack.Name, now.Format(time.RFC3339), strings.Join(imageList, "\n"),
+	)
+
+	destPath := filepath.Join(dir, "docker-compose.yaml")
+	if err := os.WriteFile(destPath, append([]byte(header), data...), 0o644); err != nil {
+		return dir, fmt.Errorf("write rollback file: %w", err)
+	}
+	return dir, nil
+}
+
+func pinImageDigest(image, localDigest string) string {
+	if localDigest == "" {
+		return image
+	}
+	ref := image
+	if idx := strings.Index(ref, "@"); idx != -1 {
+		ref = ref[:idx]
+	}
+	if idx := strings.LastIndex(ref, ":"); idx != -1 {
+		if !strings.Contains(ref[idx+1:], "/") {
+			ref = ref[:idx]
 		}
 	}
-	return result
+	return ref + "@" + localDigest
 }
 
 func buildPinnedImages(stack model.ComposeStack) map[string]string {
-	result := make(map[string]string)
+	result := make(map[string]string, len(stack.Services))
 	for _, svc := range stack.Services {
 		if svc.ContainerID == "" || svc.LocalDigest == "" {
 			continue
 		}
-		imageRef := svc.Image
-		if idx := strings.Index(imageRef, "@"); idx != -1 {
-			imageRef = imageRef[:idx]
-		}
-		if idx := strings.LastIndex(imageRef, ":"); idx != -1 {
-			if !strings.Contains(imageRef[idx+1:], "/") {
-				imageRef = imageRef[:idx]
-			}
-		}
-		result[svc.Name] = imageRef + "@" + svc.LocalDigest
+		result[svc.Name] = pinImageDigest(svc.Image, svc.LocalDigest)
 	}
 	return result
 }
 
-func patchComposeFile(data []byte, pinned map[string]string, envMap map[string][]string) ([]byte, error) {
+func patchComposeImages(data []byte, pinned map[string]string) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
@@ -104,33 +222,28 @@ func patchComposeFile(data []byte, pinned map[string]string, envMap map[string][
 	}
 
 	root := doc.Content[0]
-	patchYAMLServices(root, pinned, envMap)
-
-	return yaml.Marshal(&doc)
-}
-
-func patchYAMLServices(node *yaml.Node, pinned map[string]string, envMap map[string][]string) {
-	if node.Kind != yaml.MappingNode {
-		return
+	if root.Kind != yaml.MappingNode {
+		return data, nil
 	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		key := node.Content[i]
-		val := node.Content[i+1]
-		if key.Value == "services" && val.Kind == yaml.MappingNode {
-			for j := 0; j+1 < len(val.Content); j += 2 {
-				svcName := val.Content[j].Value
-				svcNode := val.Content[j+1]
-				if pinnedRef, ok := pinned[svcName]; ok {
-					replaceImageInService(svcNode, pinnedRef)
-				}
-				if envMap != nil {
-					if env, ok := envMap[svcName]; ok && len(env) > 0 {
-						setEnvInService(svcNode, env)
-					}
-				}
+
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "services" {
+			continue
+		}
+		svcs := root.Content[i+1]
+		if svcs.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(svcs.Content); j += 2 {
+			svcName := svcs.Content[j].Value
+			svcNode := svcs.Content[j+1]
+			if pinnedRef, ok := pinned[svcName]; ok {
+				replaceImageInService(svcNode, pinnedRef)
 			}
 		}
 	}
+
+	return yaml.Marshal(&doc)
 }
 
 func replaceImageInService(svcNode *yaml.Node, pinnedRef string) {
@@ -143,27 +256,6 @@ func replaceImageInService(svcNode *yaml.Node, pinnedRef string) {
 			return
 		}
 	}
-}
-
-func setEnvInService(svcNode *yaml.Node, env []string) {
-	if svcNode.Kind != yaml.MappingNode {
-		return
-	}
-
-	seqNode := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, e := range env {
-		seqNode.Content = append(seqNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: e})
-	}
-
-	for i := 0; i+1 < len(svcNode.Content); i += 2 {
-		if svcNode.Content[i].Value == "environment" {
-			svcNode.Content[i+1] = seqNode
-			return
-		}
-	}
-
-	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "environment"}
-	svcNode.Content = append(svcNode.Content, keyNode, seqNode)
 }
 
 func ListStackRollbacks(stackName string) ([]model.RollbackFile, error) {

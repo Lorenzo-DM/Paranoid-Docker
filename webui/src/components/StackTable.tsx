@@ -10,6 +10,7 @@ import { triggerStackSnapshot } from '../api/containers'
 import { getRollbackIncludeEnv } from '../settings'
 import type { ComposeStack } from '../types/api'
 import { UpdateBadge } from './UpdateBadge'
+import { RollbackModeBadge } from './RollbackModeBadge'
 import { ServicesTable } from './ServicesTable'
 import { GlassCheck, StatusDot, SortHeader, type SortOrder } from './GlassUI'
 
@@ -69,6 +70,7 @@ function StackRow({
           <span className="stack-name">
             <StatusDot status={stack.status} />
             {stack.name}
+            <RollbackModeBadge mode={stack.rollback_mode} size="xs" />
           </span>
         </td>
         <td><UpdateBadge updateAvailable={stack.update_available} /></td>
