@@ -1,4 +1,4 @@
-# update-docker-container
+# Paranoid Docker Update
 
 Web UI for managing Docker container and Compose stack updates with rollback support.
 
@@ -35,11 +35,48 @@ rollbacks/           # Rollback snapshots (per container/stack)
 
 ## Running
 
+### Local (development)
+
 ```bash
 go run ./cmd/server
 ```
 
-Server listens on `:1323`. Frontend dev server expected at `http://localhost:5173` (CORS pre-configured).
+Server listens on `:1323`. Frontend dev server at `http://localhost:5173` (CORS pre-configured).
+
+### Docker Compose (production)
+
+Use pre-built image from GHCR:
+
+```bash
+docker compose up -d
+```
+
+Image: `ghcr.io/lorenzo-dm/paranoid-docker:latest`
+
+#### Build locally
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+Builds 3-stage image: Bun (frontend) → Go (backend) → Alpine runtime.
+
+#### Configuration
+
+Env vars in `docker-compose.yaml`:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TZ` | `Europe/Rome` | Timezone |
+| `LISTEN_ADDR` | `:1323` | Server bind address |
+| `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS origins (comma-separated) |
+
+#### Volumes
+
+- `/var/run/docker.sock` — Docker daemon socket (read-only)
+- `rollbacks/` — Rollback snapshots (named volume)
+- `images/` — Saved image tarballs (named volume)
 
 ## API
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -73,13 +74,35 @@ func main() {
 
 	h := handler.NewHandler(containerSvc, composeSvc, imageSaverSvc, jobStore, saveJobStore, stackJobStore, stackSaveJobStore, stackSaveUpdateJobStore)
 
-	e.GET("/", func(c *echo.Context) error {
-		return c.String(http.StatusOK, "Paranoid Docker Update API")
-	})
-
 	h.RegisterRoutes(e)
 
-	if err := e.Start(":1323"); err != nil {
+	webDir := os.Getenv("WEB_DIR")
+	if webDir == "" {
+		webDir = "web"
+	}
+	if info, statErr := os.Stat(webDir); statErr == nil && info.IsDir() {
+		fsys := os.DirFS(webDir)
+		e.GET("/*", func(c *echo.Context) error {
+			p := c.Param("*")
+			if p == "" {
+				p = "index.html"
+			}
+			if _, err := fs.Stat(fsys, p); err == nil {
+				return c.FileFS(p, fsys)
+			}
+			return c.FileFS("index.html", fsys)
+		})
+	} else {
+		e.GET("/", func(c *echo.Context) error {
+			return c.String(http.StatusOK, "Paranoid Docker Update API")
+		})
+	}
+
+	listenAddr := os.Getenv("LISTEN_ADDR")
+	if listenAddr == "" {
+		listenAddr = ":1323"
+	}
+	if err := e.Start(listenAddr); err != nil {
 		e.Logger.Error("failed to start server", "error", err)
 	}
 }

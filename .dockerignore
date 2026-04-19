@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.vscode
+.idea
+.DS_Store
+.env*
+node_modules
+webui/node_modules
+webui/dist
+rollbacks/
+images/
+*.log
