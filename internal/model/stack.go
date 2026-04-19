@@ -19,6 +19,12 @@ type ComposeStack struct {
 	WorkingDir      string           `json:"working_dir"`
 	Services        []ComposeService `json:"services"`
 	UpdateAvailable bool             `json:"update_available"`
+	RollbackMode    string           `json:"rollback_mode"` // "compose" | "inspect"
+}
+
+type Capabilities struct {
+	ComposeFilesAvailable bool   `json:"compose_files_available"`
+	RollbackMode          string `json:"rollback_mode"` // "auto" | "compose" | "inspect"
 }
 
 type StackEvent struct {

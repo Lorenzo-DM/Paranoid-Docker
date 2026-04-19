@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { useStacks } from './hooks/useStacks'
 import { useContainers } from './hooks/useContainers'
+import { useCapabilities } from './hooks/useCapabilities'
 import { AppHeader } from './components/AppHeader'
 import { StackTable } from './components/StackTable'
 import { StackUpdateModal } from './components/StackUpdateModal'
@@ -26,8 +27,9 @@ interface ContainerModal {
 function App() {
   const { stacks, loading: stacksLoading, error: stacksError, refresh: refreshStacks } = useStacks()
   const { containers, loading: containersLoading, error: containersError, refresh: refreshContainers } = useContainers()
+  const { capabilities, changeMode, refresh: refreshCaps } = useCapabilities()
 
-  const refresh = () => { refreshStacks(); refreshContainers() }
+  const refresh = () => { refreshStacks(); refreshContainers(); refreshCaps() }
 
 
   const [updatingStack, setUpdatingStack] = useState<string | null>(null)
@@ -46,7 +48,7 @@ function App() {
 
   return (
     <div className="app-root">
-      <AppHeader onRefresh={refresh} />
+      <AppHeader onRefresh={refresh} capabilities={capabilities} onModeChange={changeMode} />
       
       <main className="tbl-wrap">
         <div className="title-wrap">

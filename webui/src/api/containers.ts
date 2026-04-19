@@ -1,4 +1,4 @@
-import type { ComposeStack, Container, RollbackFile, SavedImage } from '../types/api'
+import type { Capabilities, ComposeStack, Container, RollbackFile, SavedImage } from '../types/api'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
@@ -122,4 +122,19 @@ export async function fetchSavedImages(): Promise<SavedImage[]> {
 
 export function savedImageDownloadUrl(filename: string): string {
   return `${BASE}/images/${filename}`
+}
+
+export async function fetchCapabilities(): Promise<Capabilities> {
+  const res = await fetch(`${BASE}/capabilities`)
+  if (!res.ok) throw new Error(`Failed to fetch capabilities: ${res.statusText}`)
+  return res.json()
+}
+
+export async function setRollbackMode(mode: 'auto' | 'compose' | 'inspect'): Promise<void> {
+  const res = await fetch(`${BASE}/rollback-mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  })
+  if (!res.ok) throw new Error(`Failed to set rollback mode: ${res.statusText}`)
 }

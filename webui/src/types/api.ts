@@ -23,6 +23,12 @@ export interface ComposeStack {
   working_dir: string
   services: ComposeService[]
   update_available: boolean
+  rollback_mode: 'compose' | 'inspect'
+}
+
+export interface Capabilities {
+  compose_files_available: boolean
+  rollback_mode: 'auto' | 'compose' | 'inspect'
 }
 
 export interface StackEvent {

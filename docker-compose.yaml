@@ -9,6 +9,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - rollbacks:/app/rollbacks
       - images:/app/images
+      # Optional: mount the directory containing your compose stacks to enable
+      # file-based rollbacks and native `docker compose` updates.
+      # Set COMPOSE_STACKS_DIR to the host path (e.g. /home/user/stacks).
+      # - ${COMPOSE_STACKS_DIR}:${COMPOSE_STACKS_DIR}:ro
     environment:
       - TZ=Europe/Rome
       - LISTEN_ADDR=:1323

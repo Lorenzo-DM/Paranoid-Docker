@@ -12,6 +12,8 @@ import (
 	"backend/internal/repository"
 
 	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 )
 
 type ComposeStackService interface {
@@ -22,16 +24,57 @@ type ComposeStackService interface {
 	SnapshotStack(ctx context.Context, name string, includeEnv bool) (string, error)
 	StreamStackLogs(ctx context.Context, name string, w io.Writer) error
 	ListRollbacksForStack(name string) ([]model.RollbackFile, error)
+	GetCapabilities(ctx context.Context) model.Capabilities
+	GetRollbackMode() string
+	SetRollbackMode(mode string)
 }
 
 type composeStackService struct {
 	repo          repository.ContainerRepository
 	digestChecker DigestChecker
 	imageSaver    ImageSaverService
+	rollbackMode  string // "auto" | "compose" | "inspect"
 }
 
 func NewComposeStackService(repo repository.ContainerRepository, dc DigestChecker, is ImageSaverService) ComposeStackService {
-	return &composeStackService{repo: repo, digestChecker: dc, imageSaver: is}
+	return &composeStackService{repo: repo, digestChecker: dc, imageSaver: is, rollbackMode: "auto"}
+}
+
+func (s *composeStackService) GetRollbackMode() string { return s.rollbackMode }
+
+func (s *composeStackService) SetRollbackMode(mode string) {
+	if mode == "auto" || mode == "compose" || mode == "inspect" {
+		s.rollbackMode = mode
+	}
+}
+
+func (s *composeStackService) GetCapabilities(ctx context.Context) model.Capabilities {
+	stacks, _ := s.ListStacks(ctx)
+	anyAccessible := false
+	for _, st := range stacks {
+		if configFileAccessible(st.ConfigFiles) {
+			anyAccessible = true
+			break
+		}
+	}
+	return model.Capabilities{
+		ComposeFilesAvailable: anyAccessible,
+		RollbackMode:          s.rollbackMode,
+	}
+}
+
+func (s *composeStackService) effectiveMode(configFiles []string) string {
+	switch s.rollbackMode {
+	case "compose":
+		return "compose"
+	case "inspect":
+		return "inspect"
+	default: // "auto"
+		if configFileAccessible(configFiles) {
+			return "compose"
+		}
+		return "inspect"
+	}
 }
 
 func (s *composeStackService) ListStacks(ctx context.Context) ([]model.ComposeStack, error) {
@@ -82,6 +125,7 @@ func (s *composeStackService) ListStacks(ctx context.Context) ([]model.ComposeSt
 		}
 
 		stack.Status = stackStatus(runningCount, len(pd.containers))
+		stack.RollbackMode = s.effectiveMode(stack.ConfigFiles)
 		stacks = append(stacks, stack)
 	}
 
@@ -186,7 +230,7 @@ func (s *composeStackService) SnapshotStack(ctx context.Context, name string, in
 	if err != nil {
 		return "", err
 	}
-	return WriteStackRollback(ctx, *stack, s.repo, includeEnv)
+	return WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
 }
 
 func (s *composeStackService) findStack(ctx context.Context, name string) (*model.ComposeStack, error) {
@@ -236,21 +280,25 @@ func (s *composeStackService) doSaveStackImages(ctx context.Context, stack *mode
 }
 
 func (s *composeStackService) doUpdateStack(ctx context.Context, stack *model.ComposeStack, eventCh chan<- model.StackEvent, includeEnv bool) error {
-	if len(stack.ConfigFiles) == 0 {
-		err := fmt.Errorf("no compose config file found for stack %q", stack.Name)
-		eventCh <- model.StackEvent{Type: "error", Error: err.Error()}
-		return err
-	}
-
 	eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: "Saving rollback snapshot..."}
-	rollbackDir, err := WriteStackRollback(ctx, *stack, s.repo, includeEnv)
+	rollbackDir, err := WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
 	if err != nil {
 		eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("WARNING: rollback snapshot failed: %s", err)}
 	} else {
 		eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("Rollback saved to %s", rollbackDir)}
 	}
 
-	configArgs := composeFileArgs(stack.ConfigFiles)
+	if s.effectiveMode(stack.ConfigFiles) == "compose" {
+		return s.doComposeFileUpdate(ctx, stack, eventCh)
+	}
+	return s.doInspectBasedUpdate(ctx, stack, eventCh)
+}
+
+func (s *composeStackService) doComposeFileUpdate(ctx context.Context, stack *model.ComposeStack, eventCh chan<- model.StackEvent) error {
+	configArgs := make([]string, 0, len(stack.ConfigFiles)*2)
+	for _, f := range stack.ConfigFiles {
+		configArgs = append(configArgs, "-f", f)
+	}
 
 	eventCh <- model.StackEvent{Type: "progress", Step: "pull", Line: "Pulling latest images..."}
 	pullArgs := append([]string{"compose"}, configArgs...)
@@ -311,28 +359,159 @@ func (s *composeStackService) runCompose(
 	return nil
 }
 
+func (s *composeStackService) doInspectBasedUpdate(ctx context.Context, stack *model.ComposeStack, eventCh chan<- model.StackEvent) error {
+	for _, svc := range stack.Services {
+		if svc.ContainerID == "" {
+			continue
+		}
+
+		eventCh <- model.StackEvent{Type: "progress", Step: "pull", Line: fmt.Sprintf("[%s] Inspecting container...", svc.Name)}
+
+		inspect, err := s.repo.InspectContainer(ctx, svc.ContainerID)
+		if err != nil {
+			eventCh <- model.StackEvent{Type: "progress", Step: "pull", Line: fmt.Sprintf("[%s] ERROR inspecting: %s", svc.Name, err)}
+			continue
+		}
+
+		cfg := captureContainerConfig(inspect)
+
+		eventCh <- model.StackEvent{Type: "progress", Step: "pull", Line: fmt.Sprintf("[%s] Pulling %s...", svc.Name, cfg.Image)}
+
+		pullStream, err := s.repo.PullImage(ctx, cfg.Image)
+		if err != nil {
+			eventCh <- model.StackEvent{Type: "progress", Step: "pull", Line: fmt.Sprintf("[%s] ERROR pulling: %s", svc.Name, err)}
+			continue
+		}
+
+		pullCh := make(chan PullEvent, 64)
+		go ParsePullStream(pullStream, pullCh)
+		for evt := range pullCh {
+			if evt.Status != "" {
+				eventCh <- model.StackEvent{Type: "progress", Step: "pull", Line: fmt.Sprintf("[%s] %s", svc.Name, evt.Status)}
+			}
+		}
+
+		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Stopping...", svc.Name)}
+		timeout := 10
+		if err := s.repo.StopContainer(ctx, svc.ContainerID, &timeout); err != nil {
+			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR stopping: %s", svc.Name, err)}
+			continue
+		}
+
+		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Removing...", svc.Name)}
+		if err := s.repo.RemoveContainer(ctx, svc.ContainerID); err != nil {
+			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR removing: %s", svc.Name, err)}
+			continue
+		}
+
+		containerCfg := &container.Config{
+			Image:      cfg.Image,
+			Cmd:        cfg.Cmd,
+			Entrypoint: cfg.Entrypoint,
+			Env:        cfg.Env,
+			Labels:     cfg.Labels,
+		}
+		hostCfg := &container.HostConfig{
+			Binds:         cfg.Binds,
+			PortBindings:  cfg.PortBindings,
+			NetworkMode:   cfg.NetworkMode,
+			RestartPolicy: cfg.RestartPolicy,
+			AutoRemove:    cfg.AutoRemove,
+		}
+
+		var netCfg *network.NetworkingConfig
+		primaryNet := string(cfg.NetworkMode)
+		if primaryNet != "" && !strings.HasPrefix(primaryNet, "container:") &&
+			primaryNet != "host" && primaryNet != "none" && primaryNet != "bridge" {
+			netCfg = &network.NetworkingConfig{
+				EndpointsConfig: map[string]*network.EndpointSettings{
+					primaryNet: {},
+				},
+			}
+		}
+
+		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Creating...", svc.Name)}
+		newID, err := s.repo.CreateContainer(ctx, cfg.Name, containerCfg, hostCfg, netCfg)
+		if err != nil {
+			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR creating: %s", svc.Name, err)}
+			continue
+		}
+
+		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Starting...", svc.Name)}
+		if err := s.repo.StartContainer(ctx, newID); err != nil {
+			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR starting: %s", svc.Name, err)}
+			continue
+		}
+
+		for _, netName := range cfg.Networks {
+			_ = s.repo.ConnectNetwork(ctx, netName, newID, nil)
+		}
+
+		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Updated successfully", svc.Name)}
+	}
+
+	return nil
+}
+
 func (s *composeStackService) StreamStackLogs(ctx context.Context, name string, w io.Writer) error {
 	stacks, err := s.ListStacks(ctx)
 	if err != nil {
 		return err
 	}
 	for _, st := range stacks {
-		if st.Name == name {
-			if len(st.ConfigFiles) == 0 {
-				return fmt.Errorf("no config files for stack %q", name)
-			}
-			args := append([]string{"compose"}, composeFileArgs(st.ConfigFiles)...)
-			args = append(args, "logs", "--follow", "--no-color", "--timestamps")
-			cmd := exec.CommandContext(ctx, "docker", args...)
-			if st.WorkingDir != "" {
-				cmd.Dir = st.WorkingDir
-			}
-			cmd.Stdout = w
-			cmd.Stderr = w
-			return cmd.Run()
+		if st.Name != name {
+			continue
 		}
+
+		if s.effectiveMode(st.ConfigFiles) == "compose" {
+			return s.streamComposeFileLogs(ctx, st, w)
+		}
+		return s.streamInspectLogs(ctx, st, w)
 	}
 	return fmt.Errorf("stack %q not found", name)
+}
+
+func (s *composeStackService) streamComposeFileLogs(ctx context.Context, st model.ComposeStack, w io.Writer) error {
+	args := []string{"compose"}
+	for _, f := range st.ConfigFiles {
+		args = append(args, "-f", f)
+	}
+	args = append(args, "logs", "--follow", "--no-color", "--timestamps")
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if st.WorkingDir != "" {
+		cmd.Dir = st.WorkingDir
+	}
+	cmd.Stdout = w
+	cmd.Stderr = w
+	return cmd.Run()
+}
+
+func (s *composeStackService) streamInspectLogs(ctx context.Context, st model.ComposeStack, w io.Writer) error {
+	readers := make([]io.ReadCloser, 0, len(st.Services))
+	for _, svc := range st.Services {
+		if svc.ContainerID == "" {
+			continue
+		}
+		rc, err := s.repo.ContainerLogs(ctx, svc.ContainerID, true)
+		if err != nil {
+			continue
+		}
+		readers = append(readers, rc)
+	}
+
+	for _, rc := range readers {
+		go func(r io.ReadCloser) {
+			defer r.Close()
+			sc := bufio.NewScanner(r)
+			for sc.Scan() {
+				w.Write(sc.Bytes())
+				w.Write([]byte("\n"))
+			}
+		}(rc)
+	}
+
+	<-ctx.Done()
+	return nil
 }
 
 func (s *composeStackService) ListRollbacksForStack(name string) ([]model.RollbackFile, error) {
@@ -351,14 +530,6 @@ func splitConfigFiles(raw string) []string {
 		}
 	}
 	return result
-}
-
-func composeFileArgs(files []string) []string {
-	args := make([]string, 0, len(files)*2)
-	for _, f := range files {
-		args = append(args, "-f", f)
-	}
-	return args
 }
 
 func stackStatus(running, total int) string {
