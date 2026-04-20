@@ -14,6 +14,7 @@ export interface ComposeService {
   update_available: boolean
   local_digest?: string
   remote_digest?: string
+  image_labels?: Record<string, string>
 }
 
 export interface ComposeStack {
@@ -90,3 +91,6 @@ export interface SavedImage {
   size_bytes: number
   saved_at: string
 }
+
+// target (stack name or container name) → ISO datetime of last update start
+export type UpdateLog = Record<string, string>

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useStacks } from './hooks/useStacks'
 import { useContainers } from './hooks/useContainers'
 import { useCapabilities } from './hooks/useCapabilities'
+import { useUpdateLog } from './hooks/useUpdateLog'
 import { AppHeader } from './components/AppHeader'
 import { StackTable } from './components/StackTable'
 import { StackUpdateModal } from './components/StackUpdateModal'
@@ -28,8 +29,9 @@ function App() {
   const { stacks, loading: stacksLoading, error: stacksError, refresh: refreshStacks } = useStacks()
   const { containers, loading: containersLoading, error: containersError, refresh: refreshContainers } = useContainers()
   const { capabilities, changeMode, refresh: refreshCaps } = useCapabilities()
+  const { log: updateLog, refresh: refreshLog } = useUpdateLog()
 
-  const refresh = () => { refreshStacks(); refreshContainers(); refreshCaps() }
+  const refresh = () => { refreshStacks(); refreshContainers(); refreshCaps(); refreshLog() }
 
 
   const [updatingStack, setUpdatingStack] = useState<string | null>(null)
@@ -60,6 +62,7 @@ function App() {
           stacks={stacks}
           loading={stacksLoading}
           error={stacksError}
+          updateLog={updateLog}
           onUpdate={name => setUpdatingStack(name)}
           onLogs={name => setLogsStack(name)}
           onRollbacks={name => setRollbacksStack(name)}
@@ -79,6 +82,7 @@ function App() {
               containers={containers}
               loading={containersLoading}
               error={containersError}
+              updateLog={updateLog}
               onUpdate={(id, name) => setUpdatingContainer({ id, name })}
               onLogs={(id, name) => setLogsContainer({ id, name })}
               onRollbacks={(id, name) => setRollbacksContainer({ id, name })}

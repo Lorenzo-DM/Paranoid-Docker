@@ -138,3 +138,9 @@ export async function setRollbackMode(mode: 'auto' | 'compose' | 'inspect'): Pro
   })
   if (!res.ok) throw new Error(`Failed to set rollback mode: ${res.statusText}`)
 }
+
+export async function fetchUpdateLog(): Promise<Record<string, string>> {
+  const res = await fetch(`${BASE}/update-log`)
+  if (!res.ok) throw new Error(`Failed to fetch update log: ${res.statusText}`)
+  return res.json()
+}

@@ -3,6 +3,7 @@ package handler
 import (
 	"backend/internal/model"
 	"backend/internal/service"
+	"backend/internal/store"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,13 +17,14 @@ import (
 )
 
 type Handler struct {
-	containerService       service.ContainerService
-	composeService         service.ComposeStackService
-	imageSaver             service.ImageSaverService
-	jobStore               *JobStore
-	saveJobStore           *SaveJobStore
-	stackJobStore          *StackJobStore
-	stackSaveJobStore      *StackJobStore
+	containerService        service.ContainerService
+	composeService          service.ComposeStackService
+	imageSaver              service.ImageSaverService
+	store                   *store.Store
+	jobStore                *JobStore
+	saveJobStore            *SaveJobStore
+	stackJobStore           *StackJobStore
+	stackSaveJobStore       *StackJobStore
 	stackSaveUpdateJobStore *StackJobStore
 }
 
@@ -30,6 +32,7 @@ func NewHandler(
 	cs service.ContainerService,
 	cps service.ComposeStackService,
 	is service.ImageSaverService,
+	st *store.Store,
 	js *JobStore,
 	sjs *SaveJobStore,
 	stjs *StackJobStore,
@@ -40,6 +43,7 @@ func NewHandler(
 		containerService:        cs,
 		composeService:          cps,
 		imageSaver:              is,
+		store:                   st,
 		jobStore:                js,
 		saveJobStore:            sjs,
 		stackJobStore:           stjs,
@@ -77,6 +81,8 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 
 	api.GET("/capabilities", h.GetCapabilities)
 	api.POST("/rollback-mode", h.SetRollbackMode)
+
+	api.GET("/update-log", h.GetUpdateLog)
 }
 
 
@@ -101,6 +107,8 @@ func (h *Handler) TriggerStackUpdate(c *echo.Context) error {
 	var req updateRequest
 	_ = json.NewDecoder(c.Request().Body).Decode(&req)
 
+	_ = h.store.LogUpdate("stack", name, "update")
+
 	ch := make(chan model.StackEvent, 256)
 	h.stackJobStore.Set(name, ch)
 
@@ -118,6 +126,9 @@ func (h *Handler) StackUpdateStatus(c *echo.Context) error {
 
 func (h *Handler) TriggerSaveStackImages(c *echo.Context) error {
 	name := c.Param("name")
+
+	_ = h.store.LogUpdate("stack", name, "save_images")
+
 	ch := make(chan model.StackEvent, 256)
 	h.stackSaveJobStore.Set(name, ch)
 
@@ -138,6 +149,8 @@ func (h *Handler) TriggerSaveAndUpdate(c *echo.Context) error {
 	name := c.Param("name")
 	var req updateRequest
 	_ = json.NewDecoder(c.Request().Body).Decode(&req)
+
+	_ = h.store.LogUpdate("stack", name, "save_and_update")
 
 	ch := make(chan model.StackEvent, 256)
 	h.stackSaveUpdateJobStore.Set(name, ch)
@@ -286,6 +299,10 @@ func (h *Handler) TriggerUpdate(c *echo.Context) error {
 	var req updateRequest
 	_ = json.NewDecoder(c.Request().Body).Decode(&req)
 
+	if name, err := h.containerNameFromID(c, id); err == nil {
+		_ = h.store.LogUpdate("container", name, "update")
+	}
+
 	ch := make(chan service.PullEvent, 128)
 	h.jobStore.Set(id, ch)
 
@@ -405,6 +422,11 @@ func (h *Handler) DownloadRollback(c *echo.Context) error {
 
 func (h *Handler) TriggerSaveImage(c *echo.Context) error {
 	id := c.Param("id")
+
+	if name, err := h.containerNameFromID(c, id); err == nil {
+		_ = h.store.LogUpdate("container", name, "save_image")
+	}
+
 	ch := make(chan service.SaveProgress, 128)
 	h.saveJobStore.Set(id, ch)
 
@@ -493,6 +515,18 @@ func (h *Handler) SetRollbackMode(c *echo.Context) error {
 	}
 	h.composeService.SetRollbackMode(req.Mode)
 	return c.JSON(http.StatusOK, map[string]string{"mode": req.Mode})
+}
+
+func (h *Handler) GetUpdateLog(c *echo.Context) error {
+	byTarget, err := h.store.LastUpdateByTarget()
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	result := make(map[string]string, len(byTarget))
+	for target, t := range byTarget {
+		result[target] = t.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	return c.JSON(http.StatusOK, result)
 }
 
 func (h *Handler) containerNameFromID(c *echo.Context, id string) (string, error) {

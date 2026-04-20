@@ -6,12 +6,13 @@ import {
 } from '@tabler/icons-react'
 import type { Container } from '../types/api'
 import { GlassCheck, StatusDot, SortHeader, type SortOrder } from './GlassUI'
-import { UpdateBadge } from './UpdateBadge'
+import { timeAgo } from '../utils/timeAgo'
 
 interface Props {
   containers: Container[]
   loading: boolean
   error: string | null
+  updateLog: Record<string, string>
   onUpdate: (id: string, name: string) => void
   onLogs: (id: string, name: string) => void
   onRollbacks: (id: string, name: string) => void
@@ -19,7 +20,7 @@ interface Props {
   onBulkUpdate: (containers: { id: string, name: string }[]) => void
 }
 
-export function ContainerTable({ containers, loading, error, onUpdate, onLogs, onRollbacks, onSave, onBulkUpdate }: Props) {
+export function ContainerTable({ containers, loading, error, updateLog, onUpdate, onLogs, onRollbacks, onSave, onBulkUpdate }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState('')
   const [sort, setSort] = useState<SortOrder>({ field: 'name', dir: 'asc' })
@@ -103,7 +104,7 @@ export function ContainerTable({ containers, loading, error, onUpdate, onLogs, o
               </th>
               <SortHeader label="Container" field="name" sort={sort} onSort={onSort} />
               <SortHeader label="Image" field="image" sort={sort} onSort={onSort} />
-              <SortHeader label="Status" field="state" sort={sort} onSort={onSort} />
+              <th>Last updated</th>
               <th>Ports</th>
               <th className="col-actions">Actions</th>
             </tr>
@@ -142,10 +143,8 @@ export function ContainerTable({ containers, loading, error, onUpdate, onLogs, o
                       </span>
                     </td>
                     <td><span className="mono">{c.image}</span></td>
-                    <td>
-                      <div className="row">
-                        <UpdateBadge updateAvailable={c.update_available} />
-                      </div>
+                    <td className="last-updated-cell">
+                      {updateLog[c.name] ? timeAgo(updateLog[c.name]) : <span className="muted">—</span>}
                     </td>
                     <td className="muted tiny">{ports || '—'}</td>
                     <td className="col-actions" onClick={e => e.stopPropagation()}>

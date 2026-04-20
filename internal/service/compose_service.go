@@ -162,6 +162,7 @@ func (s *composeStackService) buildService(ctx context.Context, c dockertypes.Co
 		imgInspect, err := s.repo.InspectImage(ctx, c.ImageID)
 		if err == nil {
 			svc.LocalDigest = extractDigest(imgInspect)
+			svc.ImageLabels = extractOCILabels(imgInspect.Config.Labels)
 		}
 		if svc.LocalDigest != "" {
 			remote, err := s.digestChecker.GetLocalTagDigest(ctx, c.Image)
@@ -550,4 +551,20 @@ func extractDigest(inspect dockertypes.ImageInspect) string {
 		}
 	}
 	return ""
+}
+
+func extractOCILabels(labels map[string]string) map[string]string {
+	if len(labels) == 0 {
+		return nil
+	}
+	result := make(map[string]string)
+	for k, v := range labels {
+		if strings.HasPrefix(k, "org.opencontainers.image.") {
+			result[k] = v
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

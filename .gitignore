@@ -31,3 +31,5 @@ images/
 .env.local
 .env.production
 .env.development
+
+data/
