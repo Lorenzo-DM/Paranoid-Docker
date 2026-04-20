@@ -1,15 +1,16 @@
 package model
 
 type ComposeService struct {
-	Name            string `json:"name"`
-	Image           string `json:"image"`
-	ContainerID     string `json:"container_id"`
-	State           string `json:"state"`
-	Status          string `json:"status"`
-	Ports           []Port `json:"ports"`
-	UpdateAvailable bool   `json:"update_available"`
-	LocalDigest     string `json:"local_digest,omitempty"`
-	RemoteDigest    string `json:"remote_digest,omitempty"`
+	Name            string            `json:"name"`
+	Image           string            `json:"image"`
+	ContainerID     string            `json:"container_id"`
+	State           string            `json:"state"`
+	Status          string            `json:"status"`
+	Ports           []Port            `json:"ports"`
+	UpdateAvailable bool              `json:"update_available"`
+	LocalDigest     string            `json:"local_digest,omitempty"`
+	RemoteDigest    string            `json:"remote_digest,omitempty"`
+	ImageLabels     map[string]string `json:"image_labels,omitempty"`
 }
 
 type ComposeStack struct {

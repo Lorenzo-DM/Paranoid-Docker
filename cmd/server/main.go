@@ -14,6 +14,7 @@ import (
 	"backend/internal/handler"
 	"backend/internal/repository"
 	"backend/internal/service"
+	"backend/internal/store"
 )
 
 func loadEnv() {
@@ -53,6 +54,17 @@ func main() {
 		AllowHeaders: []string{"Content-Type"},
 	}))
 
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "data/history.db"
+	}
+	db, err := store.Open(dbPath)
+	if err != nil {
+		e.Logger.Error("failed to open store", "error", err)
+		return
+	}
+	defer db.Close()
+
 	dockerCli, err := dockerclient.NewClient()
 	if err != nil {
 		e.Logger.Error("failed to create docker client", "error", err)
@@ -72,7 +84,7 @@ func main() {
 	stackSaveJobStore := handler.NewStackJobStore()
 	stackSaveUpdateJobStore := handler.NewStackJobStore()
 
-	h := handler.NewHandler(containerSvc, composeSvc, imageSaverSvc, jobStore, saveJobStore, stackJobStore, stackSaveJobStore, stackSaveUpdateJobStore)
+	h := handler.NewHandler(containerSvc, composeSvc, imageSaverSvc, db, jobStore, saveJobStore, stackJobStore, stackSaveJobStore, stackSaveUpdateJobStore)
 
 	h.RegisterRoutes(e)
 

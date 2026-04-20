@@ -1,23 +1,28 @@
 import { useState, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { Menu, Collapse, Box, Skeleton, Alert, Stack } from '@mantine/core'
 import {
   IconRefresh, IconTerminal2, IconHistory,
   IconChevronDown, IconChevronRight, IconAlertCircle,
   IconFile, IconSearch, IconDeviceFloppy, IconCamera,
-  IconCheck, IconX, IconDots
+  IconCheck, IconX, IconDots, IconCloudSearch,
 } from '@tabler/icons-react'
 import { triggerStackSnapshot } from '../api/containers'
 import { getRollbackIncludeEnv } from '../settings'
 import type { ComposeStack } from '../types/api'
-import { UpdateBadge } from './UpdateBadge'
+import type { ImageCheckResult } from '../types/versionCheck'
+import { checkStackUpdates } from '../utils/imageVersionCheck'
 import { RollbackModeBadge } from './RollbackModeBadge'
 import { ServicesTable } from './ServicesTable'
+import { VersionCheckModal } from './VersionCheckModal'
 import { GlassCheck, StatusDot, SortHeader, type SortOrder } from './GlassUI'
+import { timeAgo } from '../utils/timeAgo'
 
 interface Props {
   stacks: ComposeStack[]
   loading: boolean
   error: string | null
+  updateLog: Record<string, string>
   onUpdate: (name: string) => void
   onLogs: (name: string) => void
   onRollbacks: (name: string) => void
@@ -27,13 +32,15 @@ interface Props {
 }
 
 type SnapState = 'idle' | 'loading' | 'ok' | 'error'
+type CheckState = 'idle' | 'loading' | 'done' | 'error'
 
 function StackRow({
-  stack, selected, onToggle,
+  stack, selected, lastUpdated, onToggle,
   onUpdate, onLogs, onRollbacks, onSave, onSaveAndUpdate,
 }: {
   stack: ComposeStack
   selected: boolean
+  lastUpdated?: string
   onToggle: () => void
   onUpdate: (name: string) => void
   onLogs: (name: string) => void
@@ -43,6 +50,43 @@ function StackRow({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [snap, setSnap] = useState<SnapState>('idle')
+
+  // ── Version check state ────────────────────────────────────────────────
+  const [checkState, setCheckState] = useState<CheckState>('idle')
+  const [checkResults, setCheckResults] = useState<ImageCheckResult[]>([])
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [showCheckModal, setShowCheckModal] = useState(false)
+
+  const runCheck = () => {
+    setCheckState('loading')
+    setCheckError(null)
+    setShowCheckModal(true)
+    checkStackUpdates(stack.services)
+      .then(results => {
+        setCheckResults(results)
+        setCheckState('done')
+      })
+      .catch(e => {
+        setCheckError(e instanceof Error ? e.message : 'Check failed')
+        setCheckState('error')
+      })
+  }
+
+  const handleCheckClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (checkState === 'done' || checkState === 'error') {
+      setShowCheckModal(true)
+      return
+    }
+    runCheck()
+  }
+
+  // Derive check button indicator color
+  const checkIndicator = checkState === 'done'
+    ? checkResults.some(r => r.hasBreakingChanges) ? 'danger'
+      : checkResults.some(r => r.hasUpdate) ? 'warn'
+        : 'ok'
+    : null
 
   const handleSnapshot = () => {
     setSnap('loading')
@@ -73,7 +117,7 @@ function StackRow({
             <RollbackModeBadge mode={stack.rollback_mode} size="xs" />
           </span>
         </td>
-        <td><UpdateBadge updateAvailable={stack.update_available} /></td>
+        <td className="last-updated-cell">{lastUpdated ? timeAgo(lastUpdated) : <span className="muted">—</span>}</td>
         <td className="muted">{stack.services.length} services</td>
         <td>
           <span className="mono" title={stack.config_files?.[0]}>{stack.config_files?.[0] ?? '—'}</span>
@@ -128,6 +172,22 @@ function StackRow({
               <IconTerminal2 size={13} /> Logs
             </button>
 
+            {/* ── Version check button ── */}
+            <button
+              className={`btn tiny ghost check-btn${checkState === 'loading' ? ' check-btn-loading' : ''}`}
+              onClick={handleCheckClick}
+              title="Check for new versions"
+              disabled={checkState === 'loading'}
+            >
+              {checkState === 'loading'
+                ? <span className="check-spin" />
+                : <IconCloudSearch size={13} />}
+              Check
+              {checkIndicator && (
+                <span className={`check-dot dot ${checkIndicator}`} />
+              )}
+            </button>
+
             <Menu position="bottom-end" withinPortal>
               <Menu.Target>
                 <button className="btn tiny ghost"><IconDots size={14} /></button>
@@ -164,11 +224,25 @@ function StackRow({
           </td>
         </tr>
       )}
+
+      {/* ── Version check modal (portal to avoid invalid <tr> nesting) ── */}
+      {showCheckModal && createPortal(
+        <VersionCheckModal
+          stackName={stack.name}
+          loading={checkState === 'loading'}
+          error={checkError}
+          results={checkResults}
+          onClose={() => setShowCheckModal(false)}
+          onUpdate={() => { setShowCheckModal(false); onUpdate(stack.name) }}
+          onRecheck={runCheck}
+        />,
+        document.body,
+      )}
     </>
   )
 }
 
-export function StackTable({ stacks, loading, error, onUpdate, onLogs, onRollbacks, onSave, onSaveAndUpdate, onBulkUpdate }: Props) {
+export function StackTable({ stacks, loading, error, updateLog, onUpdate, onLogs, onRollbacks, onSave, onSaveAndUpdate, onBulkUpdate }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState('')
   const [sort, setSort] = useState<SortOrder>({ field: 'name', dir: 'asc' })
@@ -242,7 +316,7 @@ export function StackTable({ stacks, loading, error, onUpdate, onLogs, onRollbac
               </th>
               <th className="col-expand" />
               <SortHeader label="Stack" field="name" sort={sort} onSort={onSort} />
-              <SortHeader label="Update" field="update_available" sort={sort} onSort={onSort} />
+              <th>Last updated</th>
               <th>Services</th>
               <th>Compose file</th>
               <th className="col-actions">Actions</th>
@@ -265,6 +339,7 @@ export function StackTable({ stacks, loading, error, onUpdate, onLogs, onRollbac
                   key={stack.name}
                   stack={stack}
                   selected={selected.has(stack.name)}
+                  lastUpdated={updateLog[stack.name]}
                   onToggle={() => toggle(stack.name)}
                   onUpdate={onUpdate}
                   onLogs={onLogs}
