@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"backend/internal/model"
@@ -14,6 +16,7 @@ import (
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"gopkg.in/yaml.v3"
 )
 
 type ComposeStackService interface {
@@ -27,6 +30,8 @@ type ComposeStackService interface {
 	GetCapabilities(ctx context.Context) model.Capabilities
 	GetRollbackMode() string
 	SetRollbackMode(mode string)
+	PreviewStackRollback(ctx context.Context, name string, filename string, mode model.RollbackRestoreMode) (model.RollbackPreview, error)
+	ExecuteStackRollback(ctx context.Context, name string, filename string, mode model.RollbackRestoreMode, confirmed bool, ch chan<- model.StackEvent) error
 }
 
 type composeStackService struct {
@@ -517,6 +522,164 @@ func (s *composeStackService) streamInspectLogs(ctx context.Context, st model.Co
 
 func (s *composeStackService) ListRollbacksForStack(name string) ([]model.RollbackFile, error) {
 	return ListStackRollbacks(name)
+}
+
+func (s *composeStackService) PreviewStackRollback(ctx context.Context, name string, filename string, mode model.RollbackRestoreMode) (model.RollbackPreview, error) {
+	manifestPath := filepath.Join("rollbacks", name, filepath.Dir(filename), "rollback-manifest.json")
+	manifest, err := ReadRollbackManifest(manifestPath)
+	if err != nil {
+		return model.RollbackPreview{}, fmt.Errorf("read rollback manifest: %w", err)
+	}
+
+	yamlBytes, err := RenderRollbackCompose(manifest, false)
+	if err != nil {
+		return model.RollbackPreview{}, fmt.Errorf("render safe compose yaml: %w", err)
+	}
+
+	actions, warnings := BuildRollbackPlan(manifest, mode)
+
+	if manifest.SourceMode == model.RollbackSourceCompose {
+		if !configFileAccessible(manifest.ComposeFiles) {
+			warnings = append(warnings, fmt.Sprintf("Compose configuration files are no longer accessible at %v. Stack rollback will fall back to container-by-container replication.", manifest.ComposeFiles))
+		}
+	}
+
+	preview := model.RollbackPreview{
+		Manifest:    manifest,
+		Yaml:        string(yamlBytes),
+		Actions:     actions,
+		Warnings:    warnings,
+		SecretsNote: "Environment variables containing sensitive data are masked in this preview, but will be restored upon execution.",
+	}
+
+	return preview, nil
+}
+
+type composeOverride struct {
+	Services map[string]serviceImageOverride `yaml:"services"`
+}
+
+type serviceImageOverride struct {
+	Image string `yaml:"image"`
+}
+
+func (s *composeStackService) ExecuteStackRollback(
+	ctx context.Context,
+	name string,
+	filename string,
+	mode model.RollbackRestoreMode,
+	confirmed bool,
+	ch chan<- model.StackEvent,
+) error {
+	if !confirmed {
+		return fmt.Errorf("rollback execution requires confirmation")
+	}
+
+	manifestPath := filepath.Join("rollbacks", name, filepath.Dir(filename), "rollback-manifest.json")
+	manifest, err := ReadRollbackManifest(manifestPath)
+	if err != nil {
+		ch <- model.StackEvent{Type: "error", Step: "rollback", Error: fmt.Sprintf("read manifest: %s", err)}
+		return fmt.Errorf("read rollback manifest: %w", err)
+	}
+
+	if manifest.TargetName != name {
+		err := fmt.Errorf("target mismatch: manifest target name is %q, but requested %q", manifest.TargetName, name)
+		ch <- model.StackEvent{Type: "error", Step: "rollback", Error: err.Error()}
+		return err
+	}
+
+	if manifest.SourceMode == model.RollbackSourceCompose && configFileAccessible(manifest.ComposeFiles) {
+		// Compose files available -> run docker compose up -d with temporary override
+		ch <- model.StackEvent{Type: "progress", Step: "rollback", Line: "Creating temporary Compose override file with rollback images..."}
+
+		override := composeOverride{
+			Services: make(map[string]serviceImageOverride, len(manifest.Items)),
+		}
+		for _, item := range manifest.Items {
+			if item.ServiceName != "" {
+				override.Services[item.ServiceName] = serviceImageOverride{
+					Image: item.RollbackImage,
+				}
+			}
+		}
+
+		overrideData, err := yaml.Marshal(override)
+		if err != nil {
+			err := fmt.Errorf("marshal override: %w", err)
+			ch <- model.StackEvent{Type: "error", Step: "rollback", Error: err.Error()}
+			return err
+		}
+
+		tempOverrideFile, err := os.CreateTemp(manifest.WorkingDir, "docker-compose.rollback-override-*.yaml")
+		if err != nil {
+			tempOverrideFile, err = os.CreateTemp("", "docker-compose.rollback-override-*.yaml")
+			if err != nil {
+				err := fmt.Errorf("create temp override file: %w", err)
+				ch <- model.StackEvent{Type: "error", Step: "rollback", Error: err.Error()}
+				return err
+			}
+		}
+		defer os.Remove(tempOverrideFile.Name())
+		defer tempOverrideFile.Close()
+
+		if _, err := tempOverrideFile.Write(overrideData); err != nil {
+			err := fmt.Errorf("write temp override file: %w", err)
+			ch <- model.StackEvent{Type: "error", Step: "rollback", Error: err.Error()}
+			return err
+		}
+
+		var configArgs []string
+		for _, f := range manifest.ComposeFiles {
+			configArgs = append(configArgs, "-f", f)
+		}
+		configArgs = append(configArgs, "-f", tempOverrideFile.Name())
+
+		ch <- model.StackEvent{Type: "progress", Step: "pull", Line: "Pulling rollback images..."}
+		pullArgs := append([]string{"compose"}, configArgs...)
+		pullArgs = append(pullArgs, "pull")
+		if err := s.runCompose(ctx, manifest.WorkingDir, pullArgs, "pull", ch); err != nil {
+			return err
+		}
+
+		ch <- model.StackEvent{Type: "progress", Step: "up", Line: "Deploying rollback containers..."}
+		upArgs := append([]string{"compose"}, configArgs...)
+		upArgs = append(upArgs, "up", "-d", "--remove-orphans")
+		if err := s.runCompose(ctx, manifest.WorkingDir, upArgs, "up", ch); err != nil {
+			return err
+		}
+	} else {
+		// Inspect mode (Compose files unavailable) -> execute per-container standard or advanced rollback
+		ch <- model.StackEvent{Type: "progress", Step: "rollback", Line: "Compose configuration not found. Executing container-by-container replication..."}
+
+		for _, item := range manifest.Items {
+			ch <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("Rolling back container %s (service %s)...", item.Name, item.ServiceName)}
+
+			var cfg model.ContainerConfig
+			if mode == model.RollbackRestoreAdvanced {
+				cfg = item.Config
+			} else {
+				inspect, err := s.repo.InspectContainer(ctx, item.Name)
+				if err != nil {
+					cfg = item.Config
+				} else {
+					cfg = captureContainerConfig(inspect)
+				}
+			}
+
+			progressFunc := func(status string) {
+				ch <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("[%s] %s", item.Name, status)}
+			}
+
+			err = executeContainerRollbackInternal(ctx, s.repo, item.Name, cfg, item.RollbackImage, progressFunc)
+			if err != nil {
+				ch <- model.StackEvent{Type: "error", Step: "rollback", Error: fmt.Sprintf("failed to roll back container %s: %s", item.Name, err)}
+				return err
+			}
+		}
+	}
+
+	ch <- model.StackEvent{Type: "done", Line: "Stack rolled back successfully"}
+	return nil
 }
 
 func splitConfigFiles(raw string) []string {

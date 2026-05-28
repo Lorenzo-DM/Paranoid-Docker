@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +22,8 @@ type ContainerService interface {
 	UpdateContainer(ctx context.Context, id string, progressCh chan<- PullEvent, includeEnv bool) error
 	StreamLogs(ctx context.Context, id string, w io.Writer) error
 	ListRollbacksForContainer(containerName string) ([]model.RollbackFile, error)
+	PreviewContainerRollback(ctx context.Context, name string, filename string, mode model.RollbackRestoreMode) (model.RollbackPreview, error)
+	ExecuteContainerRollback(ctx context.Context, name string, filename string, mode model.RollbackRestoreMode, confirmed bool, ch chan<- PullEvent) error
 }
 
 type containerService struct {
@@ -224,6 +227,191 @@ func (s *containerService) StreamLogs(ctx context.Context, id string, w io.Write
 
 func (s *containerService) ListRollbacksForContainer(containerName string) ([]model.RollbackFile, error) {
 	return ListRollbacks(containerName)
+}
+
+func (s *containerService) PreviewContainerRollback(ctx context.Context, name string, filename string, mode model.RollbackRestoreMode) (model.RollbackPreview, error) {
+	manifestPath := filepath.Join("rollbacks", name, filepath.Dir(filename), "rollback-manifest.json")
+	manifest, err := ReadRollbackManifest(manifestPath)
+	if err != nil {
+		return model.RollbackPreview{}, fmt.Errorf("read rollback manifest: %w", err)
+	}
+
+	yamlBytes, err := RenderRollbackCompose(manifest, false)
+	if err != nil {
+		return model.RollbackPreview{}, fmt.Errorf("render safe compose yaml: %w", err)
+	}
+
+	actions, warnings := BuildRollbackPlan(manifest, mode)
+
+	// If container does not exist currently, add warning
+	inspect, err := s.repo.InspectContainer(ctx, name)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("Target container %q does not exist. A fresh recreation will be performed.", name))
+	} else {
+		if len(manifest.Items) > 0 {
+			item := manifest.Items[0]
+			currentImg := inspect.Config.Image
+			if currentImg == item.RollbackImage {
+				warnings = append(warnings, fmt.Sprintf("Current image is already at the rollback target: %s", currentImg))
+			}
+		}
+	}
+
+	preview := model.RollbackPreview{
+		Manifest:    manifest,
+		Yaml:        string(yamlBytes),
+		Actions:     actions,
+		Warnings:    warnings,
+		SecretsNote: "Environment variables containing sensitive data are masked in this preview, but will be restored upon execution.",
+	}
+
+	return preview, nil
+}
+
+func (s *containerService) ExecuteContainerRollback(ctx context.Context, name string, filename string, mode model.RollbackRestoreMode, confirmed bool, ch chan<- PullEvent) error {
+	if !confirmed {
+		return fmt.Errorf("rollback execution requires confirmation")
+	}
+
+	manifestPath := filepath.Join("rollbacks", name, filepath.Dir(filename), "rollback-manifest.json")
+	manifest, err := ReadRollbackManifest(manifestPath)
+	if err != nil {
+		ch <- PullEvent{Type: "error", Error: fmt.Sprintf("read manifest: %s", err)}
+		return fmt.Errorf("read rollback manifest: %w", err)
+	}
+
+	if manifest.TargetName != name {
+		err := fmt.Errorf("target mismatch: manifest target name is %q, but requested %q", manifest.TargetName, name)
+		ch <- PullEvent{Type: "error", Error: err.Error()}
+		return err
+	}
+
+	if len(manifest.Items) == 0 {
+		err := fmt.Errorf("rollback manifest contains no containers")
+		ch <- PullEvent{Type: "error", Error: err.Error()}
+		return err
+	}
+	item := manifest.Items[0]
+
+	var cfg model.ContainerConfig
+	if mode == model.RollbackRestoreAdvanced {
+		cfg = item.Config
+	} else {
+		inspect, err := s.repo.InspectContainer(ctx, name)
+		if err != nil {
+			err := fmt.Errorf("inspect current container: %w", err)
+			ch <- PullEvent{Type: "error", Error: err.Error()}
+			return err
+		}
+		cfg = captureContainerConfig(inspect)
+	}
+
+	progressFunc := func(status string) {
+		ch <- PullEvent{Type: "progress", Status: status}
+	}
+
+	err = executeContainerRollbackInternal(ctx, s.repo, name, cfg, item.RollbackImage, progressFunc)
+	if err != nil {
+		ch <- PullEvent{Type: "error", Error: err.Error()}
+		return err
+	}
+
+	ch <- PullEvent{
+		Type:    "done",
+		Status:  "Container rolled back successfully",
+		Message: name,
+	}
+	return nil
+}
+
+func executeContainerRollbackInternal(
+	ctx context.Context,
+	repo repository.ContainerRepository,
+	name string,
+	cfg model.ContainerConfig,
+	rollbackImage string,
+	progress func(string),
+) error {
+	cfg.Image = rollbackImage
+
+	progress(fmt.Sprintf("Pulling rollback image %s...", cfg.Image))
+	pullStream, err := repo.PullImage(ctx, cfg.Image)
+	if err != nil {
+		return fmt.Errorf("pull: %w", err)
+	}
+	pullCh := make(chan PullEvent, 64)
+	go ParsePullStream(pullStream, pullCh)
+	for evt := range pullCh {
+		if evt.Type == "progress" && evt.Status != "" {
+			progress(evt.Status)
+		}
+		if evt.Type == "error" {
+			return fmt.Errorf("pull error: %s", evt.Error)
+		}
+	}
+
+	hasOldContainer := false
+	if _, err := repo.InspectContainer(ctx, name); err == nil {
+		hasOldContainer = true
+	}
+
+	if hasOldContainer {
+		progress("Stopping container...")
+		timeout := 10
+		if err := repo.StopContainer(ctx, name, &timeout); err != nil {
+			return fmt.Errorf("stop: %w", err)
+		}
+
+		progress("Removing old container...")
+		if err := repo.RemoveContainer(ctx, name); err != nil {
+			return fmt.Errorf("remove: %w", err)
+		}
+	}
+
+	containerCfg := &container.Config{
+		Image:      cfg.Image,
+		Cmd:        cfg.Cmd,
+		Entrypoint: cfg.Entrypoint,
+		Env:        cfg.Env,
+		Labels:     cfg.Labels,
+	}
+	hostCfg := &container.HostConfig{
+		Binds:         cfg.Binds,
+		PortBindings:  cfg.PortBindings,
+		NetworkMode:   cfg.NetworkMode,
+		RestartPolicy: cfg.RestartPolicy,
+		AutoRemove:    cfg.AutoRemove,
+	}
+
+	var netCfg *network.NetworkingConfig
+	primaryNet := string(cfg.NetworkMode)
+	if primaryNet != "" && !strings.HasPrefix(primaryNet, "container:") &&
+		primaryNet != "host" && primaryNet != "none" && primaryNet != "bridge" {
+		netCfg = &network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				primaryNet: {},
+			},
+		}
+	}
+
+	progress("Creating container...")
+	newID, err := repo.CreateContainer(ctx, name, containerCfg, hostCfg, netCfg)
+	if err != nil {
+		return fmt.Errorf("create: %w", err)
+	}
+
+	progress("Starting container...")
+	if err := repo.StartContainer(ctx, newID); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+
+	for _, netName := range cfg.Networks {
+		if netName != primaryNet && netName != "" && netName != "default" {
+			_ = repo.ConnectNetwork(ctx, netName, newID, nil)
+		}
+	}
+
+	return nil
 }
 
 func mapContainer(c types.Container) model.Container {

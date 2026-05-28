@@ -65,6 +65,8 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	api.POST("/stacks/:name/snapshot", h.SnapshotStack)
 	api.GET("/stacks/:name/logs", h.StreamStackLogs)
 	api.GET("/stacks/:name/rollbacks", h.ListStackRollbacks)
+	api.GET("/stacks/:name/rollbacks/:timestamp/:filename/preview", h.PreviewStackRollback)
+	api.POST("/stacks/:name/rollbacks/:timestamp/:filename/execute", h.ExecuteStackRollback)
 	api.GET("/stacks/:name/rollbacks/*", h.DownloadStackRollback)
 
 	api.GET("/containers", h.ListContainers)
@@ -72,7 +74,9 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	api.GET("/containers/:id/pull-status", h.PullStatus)
 	api.GET("/containers/:id/logs", h.StreamLogs)
 	api.GET("/containers/:id/rollbacks", h.ListRollbacks)
-	api.GET("/containers/:id/rollbacks/:filename", h.DownloadRollback)
+	api.GET("/containers/:id/rollbacks/:timestamp/:filename/preview", h.PreviewContainerRollback)
+	api.POST("/containers/:id/rollbacks/:timestamp/:filename/execute", h.ExecuteContainerRollback)
+	api.GET("/containers/:id/rollbacks/:timestamp/:filename", h.DownloadRollback)
 
 	api.POST("/containers/:id/save-image", h.TriggerSaveImage)
 	api.GET("/containers/:id/save-status", h.SaveStatus)
@@ -100,6 +104,11 @@ func (h *Handler) ListStacks(c *echo.Context) error {
 
 type updateRequest struct {
 	IncludeEnv bool `json:"include_env"`
+}
+
+type rollbackRequest struct {
+	Mode      string `json:"mode"`
+	Confirmed bool   `json:"confirmed"`
 }
 
 func (h *Handler) TriggerStackUpdate(c *echo.Context) error {
@@ -409,12 +418,13 @@ func (h *Handler) ListRollbacks(c *echo.Context) error {
 
 func (h *Handler) DownloadRollback(c *echo.Context) error {
 	id := c.Param("id")
+	timestamp := c.Param("timestamp")
 	filename := c.Param("filename")
 	name, err := h.containerNameFromID(c, id)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-	path := filepath.Join("rollbacks", name, filepath.Base(filename))
+	path := filepath.Join("rollbacks", name, filepath.Clean(timestamp), filepath.Base(filename))
 	return c.File(path)
 }
 
@@ -552,4 +562,120 @@ func sseHeaders(c *echo.Context) {
 func writeSSEEvent(w io.Writer, event string, data interface{}) {
 	b, _ := json.Marshal(data)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
+}
+
+func (h *Handler) PreviewContainerRollback(c *echo.Context) error {
+	id := c.Param("id")
+	timestamp := c.Param("timestamp")
+	filename := c.Param("filename")
+
+	name, err := h.containerNameFromID(c, id)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	modeStr := c.QueryParam("mode")
+	if modeStr == "" {
+		modeStr = "standard"
+	}
+	mode := model.RollbackRestoreMode(modeStr)
+
+	relFilename := filepath.Join(timestamp, filename)
+	preview, err := h.containerService.PreviewContainerRollback(c.Request().Context(), name, relFilename, mode)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, preview)
+}
+
+func (h *Handler) ExecuteContainerRollback(c *echo.Context) error {
+	id := c.Param("id")
+	timestamp := c.Param("timestamp")
+	filename := c.Param("filename")
+
+	name, err := h.containerNameFromID(c, id)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	var req rollbackRequest
+	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	}
+
+	if !req.Confirmed {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "rollback must be confirmed"})
+	}
+
+	mode := model.RollbackRestoreMode(req.Mode)
+	if mode == "" {
+		mode = model.RollbackRestoreStandard
+	}
+
+	_ = h.store.LogUpdate("container", name, "rollback")
+
+	ch := make(chan service.PullEvent, 128)
+	h.jobStore.Set(id, ch)
+
+	go func() {
+		defer h.jobStore.Delete(id)
+		relFilename := filepath.Join(timestamp, filename)
+		_ = h.containerService.ExecuteContainerRollback(context.Background(), name, relFilename, mode, req.Confirmed, ch)
+	}()
+
+	return c.JSON(http.StatusAccepted, map[string]string{"job_id": id})
+}
+
+func (h *Handler) PreviewStackRollback(c *echo.Context) error {
+	name := c.Param("name")
+	timestamp := c.Param("timestamp")
+	filename := c.Param("filename")
+
+	modeStr := c.QueryParam("mode")
+	if modeStr == "" {
+		modeStr = "standard"
+	}
+	mode := model.RollbackRestoreMode(modeStr)
+
+	relFilename := filepath.Join(timestamp, filename)
+	preview, err := h.composeService.PreviewStackRollback(c.Request().Context(), name, relFilename, mode)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, preview)
+}
+
+func (h *Handler) ExecuteStackRollback(c *echo.Context) error {
+	name := c.Param("name")
+	timestamp := c.Param("timestamp")
+	filename := c.Param("filename")
+
+	var req rollbackRequest
+	if err := json.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	}
+
+	if !req.Confirmed {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "rollback must be confirmed"})
+	}
+
+	mode := model.RollbackRestoreMode(req.Mode)
+	if mode == "" {
+		mode = model.RollbackRestoreStandard
+	}
+
+	_ = h.store.LogUpdate("stack", name, "rollback")
+
+	ch := make(chan model.StackEvent, 256)
+	h.stackJobStore.Set(name, ch)
+
+	go func() {
+		defer h.stackJobStore.Delete(name)
+		relFilename := filepath.Join(timestamp, filename)
+		_ = h.composeService.ExecuteStackRollback(context.Background(), name, relFilename, mode, req.Confirmed, ch)
+	}()
+
+	return c.JSON(http.StatusAccepted, map[string]string{"job_id": name})
 }
