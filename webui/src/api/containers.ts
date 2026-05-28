@@ -1,4 +1,4 @@
-import type { Capabilities, ComposeStack, Container, RollbackFile, SavedImage } from '../types/api'
+import type { Capabilities, ComposeStack, Container, RollbackFile, RollbackPreview, RollbackRestoreMode, SavedImage } from '../types/api'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
@@ -100,8 +100,53 @@ export async function fetchRollbacks(id: string): Promise<RollbackFile[]> {
   return res.json()
 }
 
-export function rollbackDownloadUrl(id: string, filename: string): string {
-  return `${BASE}/containers/${id}/rollbacks/${filename}`
+/** Split a combined "timestamp/filename" string into its two parts. */
+function splitRollbackFilename(rollbackFilename: string): { timestamp: string; filename: string } {
+  const idx = rollbackFilename.indexOf('/')
+  if (idx === -1) return { timestamp: '', filename: rollbackFilename }
+  return { timestamp: rollbackFilename.slice(0, idx), filename: rollbackFilename.slice(idx + 1) }
+}
+
+export function rollbackDownloadUrl(id: string, rollbackFilename: string): string {
+  const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  if (timestamp) return `${BASE}/containers/${id}/rollbacks/${timestamp}/${filename}`
+  return `${BASE}/containers/${id}/rollbacks/${rollbackFilename}`
+}
+
+export async function fetchContainerRollbackPreview(id: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<RollbackPreview> {
+  const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  const res = await fetch(`${BASE}/containers/${id}/rollbacks/${timestamp}/${filename}/preview?mode=${mode}`)
+  if (!res.ok) throw new Error(`Failed to fetch rollback preview: ${res.statusText}`)
+  return res.json()
+}
+
+export async function executeContainerRollback(id: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<{ job_id: string }> {
+  const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  const res = await fetch(`${BASE}/containers/${id}/rollbacks/${timestamp}/${filename}/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, confirmed: true }),
+  })
+  if (!res.ok) throw new Error(`Failed to execute rollback: ${res.statusText}`)
+  return res.json()
+}
+
+export async function fetchStackRollbackPreview(name: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<RollbackPreview> {
+  const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  const res = await fetch(`${BASE}/stacks/${name}/rollbacks/${timestamp}/${filename}/preview?mode=${mode}`)
+  if (!res.ok) throw new Error(`Failed to fetch rollback preview: ${res.statusText}`)
+  return res.json()
+}
+
+export async function executeStackRollback(name: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<{ job_id: string }> {
+  const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  const res = await fetch(`${BASE}/stacks/${name}/rollbacks/${timestamp}/${filename}/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, confirmed: true }),
+  })
+  if (!res.ok) throw new Error(`Failed to execute rollback: ${res.statusText}`)
+  return res.json()
 }
 
 export async function triggerSaveImage(id: string): Promise<{ job_id: string }> {

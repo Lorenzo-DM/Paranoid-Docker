@@ -94,3 +94,33 @@ export interface SavedImage {
 
 // target (stack name or container name) → ISO datetime of last update start
 export type UpdateLog = Record<string, string>
+
+export type RollbackRestoreMode = 'standard' | 'advanced'
+
+export interface RollbackAction {
+  type: string
+  target: string
+  description: string
+  destructive: boolean
+}
+
+export interface RollbackPreview {
+  manifest: {
+    version: number
+    target_type: string
+    target_name: string
+    created_at: string
+    source_mode: string
+    items: Array<{
+      name: string
+      current_image: string
+      rollback_image: string
+      env_masked?: Record<string, string>
+    }>
+    warnings?: string[]
+  }
+  yaml: string
+  actions: RollbackAction[]
+  warnings: string[]
+  secrets_note: string
+}
