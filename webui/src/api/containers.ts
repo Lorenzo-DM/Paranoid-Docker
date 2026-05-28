@@ -115,6 +115,7 @@ export function rollbackDownloadUrl(id: string, rollbackFilename: string): strin
 
 export async function fetchContainerRollbackPreview(id: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<RollbackPreview> {
   const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  if (!timestamp) throw new Error(`Invalid rollback filename (expected timestamp/filename): ${rollbackFilename}`)
   const res = await fetch(`${BASE}/containers/${id}/rollbacks/${timestamp}/${filename}/preview?mode=${mode}`)
   if (!res.ok) throw new Error(`Failed to fetch rollback preview: ${res.statusText}`)
   return res.json()
@@ -122,6 +123,7 @@ export async function fetchContainerRollbackPreview(id: string, rollbackFilename
 
 export async function executeContainerRollback(id: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<{ job_id: string }> {
   const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  if (!timestamp) throw new Error(`Invalid rollback filename (expected timestamp/filename): ${rollbackFilename}`)
   const res = await fetch(`${BASE}/containers/${id}/rollbacks/${timestamp}/${filename}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -133,6 +135,7 @@ export async function executeContainerRollback(id: string, rollbackFilename: str
 
 export async function fetchStackRollbackPreview(name: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<RollbackPreview> {
   const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  if (!timestamp) throw new Error(`Invalid rollback filename (expected timestamp/filename): ${rollbackFilename}`)
   const res = await fetch(`${BASE}/stacks/${name}/rollbacks/${timestamp}/${filename}/preview?mode=${mode}`)
   if (!res.ok) throw new Error(`Failed to fetch rollback preview: ${res.statusText}`)
   return res.json()
@@ -140,6 +143,7 @@ export async function fetchStackRollbackPreview(name: string, rollbackFilename: 
 
 export async function executeStackRollback(name: string, rollbackFilename: string, mode: RollbackRestoreMode): Promise<{ job_id: string }> {
   const { timestamp, filename } = splitRollbackFilename(rollbackFilename)
+  if (!timestamp) throw new Error(`Invalid rollback filename (expected timestamp/filename): ${rollbackFilename}`)
   const res = await fetch(`${BASE}/stacks/${name}/rollbacks/${timestamp}/${filename}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

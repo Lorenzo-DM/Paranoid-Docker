@@ -65,10 +65,12 @@ export function RollbacksModal({ containerId, containerName, onClose }: Props) {
     setExecError(null)
     setExecSuccess(false)
     setYamlOpen(false)
+    let cancelled = false
     fetchContainerRollbackPreview(containerId, selected.filename, mode)
-      .then(setPreview)
-      .catch(e => setPreviewError(e.message))
-      .finally(() => setPreviewLoading(false))
+      .then(p => { if (!cancelled) setPreview(p) })
+      .catch(e => { if (!cancelled) setPreviewError(e.message) })
+      .finally(() => { if (!cancelled) setPreviewLoading(false) })
+    return () => { cancelled = true }
   }, [selected, mode, containerId])
 
   function handleExecute() {

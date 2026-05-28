@@ -64,10 +64,12 @@ export function StackRollbacksModal({ stackName, onClose }: Props) {
     setExecError(null)
     setExecSuccess(false)
     setYamlOpen(false)
+    let cancelled = false
     fetchStackRollbackPreview(stackName, selected.filename, mode)
-      .then(setPreview)
-      .catch(e => setPreviewError(e.message))
-      .finally(() => setPreviewLoading(false))
+      .then(p => { if (!cancelled) setPreview(p) })
+      .catch(e => { if (!cancelled) setPreviewError(e.message) })
+      .finally(() => { if (!cancelled) setPreviewLoading(false) })
+    return () => { cancelled = true }
   }, [selected, mode, stackName])
 
   function handleExecute() {
