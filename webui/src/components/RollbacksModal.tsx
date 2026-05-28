@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Modal,
   Table,
@@ -43,6 +43,11 @@ export function RollbacksModal({ containerId, containerName, onClose }: Props) {
   const [execSuccess, setExecSuccess] = useState(false)
 
   const [yamlOpen, setYamlOpen] = useState(false)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => { if (closeTimerRef.current) clearTimeout(closeTimerRef.current) }
+  }, [])
 
   useEffect(() => {
     if (!containerId) return
@@ -80,7 +85,7 @@ export function RollbacksModal({ containerId, containerName, onClose }: Props) {
     executeContainerRollback(containerId, selected.filename, mode)
       .then(() => {
         setExecSuccess(true)
-        setTimeout(() => onClose(), 1500)
+        closeTimerRef.current = setTimeout(() => onClose(), 1500)
       })
       .catch(e => setExecError(e.message))
       .finally(() => setExecuting(false))
