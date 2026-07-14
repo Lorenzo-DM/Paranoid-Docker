@@ -51,7 +51,7 @@ func (s *composeStackService) GetCapabilities(ctx context.Context) model.Capabil
 	stacks, _ := s.ListStacks(ctx)
 	anyAccessible := false
 	for _, st := range stacks {
-		if configFileAccessible(st.ConfigFiles) {
+		if safeComposeContext(st.ConfigFiles, st.WorkingDir) {
 			anyAccessible = true
 			break
 		}
@@ -62,14 +62,15 @@ func (s *composeStackService) GetCapabilities(ctx context.Context) model.Capabil
 	}
 }
 
-func (s *composeStackService) effectiveMode(configFiles []string) string {
+// effectiveMode resolves the rollback mode for a stack. Compose mode is
+// only used when the label-supplied paths pass validation — even when
+// forced — since they end up as docker CLI arguments.
+func (s *composeStackService) effectiveMode(configFiles []string, workingDir string) string {
 	switch s.rollbackMode {
-	case "compose":
-		return "compose"
 	case "inspect":
 		return "inspect"
-	default: // "auto"
-		if configFileAccessible(configFiles) {
+	default: // "compose" or "auto"
+		if safeComposeContext(configFiles, workingDir) {
 			return "compose"
 		}
 		return "inspect"
@@ -124,7 +125,7 @@ func (s *composeStackService) ListStacks(ctx context.Context) ([]model.ComposeSt
 		}
 
 		stack.Status = stackStatus(runningCount, len(pd.containers))
-		stack.RollbackMode = s.effectiveMode(stack.ConfigFiles)
+		stack.RollbackMode = s.effectiveMode(stack.ConfigFiles, stack.WorkingDir)
 		stacks = append(stacks, stack)
 	}
 
@@ -230,7 +231,7 @@ func (s *composeStackService) SnapshotStack(ctx context.Context, name string, in
 	if err != nil {
 		return "", err
 	}
-	return s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
+	return s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles, stack.WorkingDir))
 }
 
 func (s *composeStackService) findStack(ctx context.Context, name string) (*model.ComposeStack, error) {
@@ -281,14 +282,14 @@ func (s *composeStackService) doSaveStackImages(ctx context.Context, stack *mode
 
 func (s *composeStackService) doUpdateStack(ctx context.Context, stack *model.ComposeStack, eventCh chan<- model.StackEvent, includeEnv bool) error {
 	eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: "Saving rollback snapshot..."}
-	rollbackDir, err := s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
+	rollbackDir, err := s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles, stack.WorkingDir))
 	if err != nil {
 		eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("WARNING: rollback snapshot failed: %s", err)}
 	} else {
 		eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("Rollback saved to %s", rollbackDir)}
 	}
 
-	if s.effectiveMode(stack.ConfigFiles) == "compose" {
+	if s.effectiveMode(stack.ConfigFiles, stack.WorkingDir) == "compose" {
 		return s.doComposeFileUpdate(ctx, stack, eventCh)
 	}
 	return s.doInspectBasedUpdate(ctx, stack, eventCh)
@@ -396,7 +397,7 @@ func (s *composeStackService) StreamStackLogs(ctx context.Context, name string, 
 			continue
 		}
 
-		if s.effectiveMode(st.ConfigFiles) == "compose" {
+		if s.effectiveMode(st.ConfigFiles, st.WorkingDir) == "compose" {
 			return s.streamComposeFileLogs(ctx, st, w)
 		}
 		return s.streamInspectLogs(ctx, st, w)

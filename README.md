@@ -72,6 +72,28 @@ Env vars in `docker-compose.yaml`:
 | `LISTEN_ADDR` | `:1323` | Server bind address |
 | `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS origins (comma-separated) |
 | `COMPOSE_STACKS_DIR` | *(not set)* | Host path to compose stacks directory (optional) |
+| `ROLLBACKS_DIR` | `rollbacks` | Directory for rollback snapshots |
+| `IMAGES_DIR` | `images` | Directory for saved image tarballs |
+
+#### Security hardening
+
+The shipped `docker-compose.yaml` runs with `no-new-privileges:true` and
+`cap_drop: ALL`. The container still runs as **root** by default because it
+must talk to the docker socket.
+
+**Non-root (opt-in):** the container user needs the docker socket's group.
+Find the GID on the host and set the compose `user:` accordingly:
+
+```bash
+stat -c %g /var/run/docker.sock   # e.g. 998
+```
+
+```yaml
+    user: "1000:998"
+```
+
+Note: compose-file rollback mode runs the `docker` CLI inside the container;
+the non-root user must retain read access to the mounted stacks directory.
 
 #### Volumes
 

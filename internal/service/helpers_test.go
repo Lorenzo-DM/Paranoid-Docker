@@ -98,18 +98,23 @@ func TestEffectiveMode(t *testing.T) {
 		name        string
 		mode        string
 		configFiles []string
+		workingDir  string
 		want        string
 	}{
-		{"forced compose", "compose", nil, "compose"},
-		{"forced inspect", "inspect", []string{existing}, "inspect"},
-		{"auto with accessible file", "auto", []string{existing}, "compose"},
-		{"auto with missing file", "auto", []string{filepath.Join(tmp, "missing.yaml")}, "inspect"},
-		{"auto with no files", "auto", nil, "inspect"},
+		{"forced compose with valid file", "compose", []string{existing}, tmp, "compose"},
+		{"forced compose without files falls back", "compose", nil, "", "inspect"},
+		{"forced inspect", "inspect", []string{existing}, tmp, "inspect"},
+		{"auto with accessible file", "auto", []string{existing}, tmp, "compose"},
+		{"auto with missing file", "auto", []string{filepath.Join(tmp, "missing.yaml")}, tmp, "inspect"},
+		{"auto with no files", "auto", nil, "", "inspect"},
+		{"relative path rejected", "auto", []string{"docker-compose.yaml"}, tmp, "inspect"},
+		{"flag-like path rejected", "compose", []string{filepath.Join(tmp, "-rm.yaml")}, tmp, "inspect"},
+		{"missing working dir rejected", "auto", []string{existing}, filepath.Join(tmp, "nodir"), "inspect"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &composeStackService{rollbackMode: tc.mode}
-			if got := svc.effectiveMode(tc.configFiles); got != tc.want {
+			if got := svc.effectiveMode(tc.configFiles, tc.workingDir); got != tc.want {
 				t.Errorf("effectiveMode = %q, want %q", got, tc.want)
 			}
 		})

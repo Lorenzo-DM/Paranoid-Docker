@@ -281,6 +281,67 @@ func TestDownloadStackRollback(t *testing.T) {
 	}
 }
 
+func TestPathTraversalRejected(t *testing.T) {
+	env := newTestEnv(t)
+
+	// plant a secret outside the served base dirs
+	secret := filepath.Join(filepath.Dir(env.rollbacksDir), "secret.txt")
+	if err := os.WriteFile(secret, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := []string{
+		"/api/v1/stacks/mystack/rollbacks/../../../secret.txt",
+		"/api/v1/stacks/mystack/rollbacks/..%2F..%2F..%2Fsecret.txt",
+		"/api/v1/stacks/../rollbacks/x.yaml",
+		"/api/v1/images/..%2Fsecret.txt",
+		"/api/v1/images/..%2F..%2Fsecret.txt",
+		"/api/v1/containers/..%2Fx/rollbacks",
+	}
+	for _, p := range paths {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		env.e.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK && strings.Contains(rec.Body.String(), "secret") {
+			t.Errorf("%s leaked file content", p)
+		}
+		if rec.Code != http.StatusBadRequest && rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 400/404", p, rec.Code)
+		}
+	}
+}
+
+func TestInvalidParamsRejected(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/stacks/bad%20name/update"},
+		{http.MethodPost, "/api/v1/containers/-flag/update"},
+		{http.MethodGet, "/api/v1/stacks/a%2Fb/rollbacks"},
+	}
+	for _, tc := range cases {
+		rec := env.request(tc.method, tc.path, nil)
+		if rec.Code != http.StatusBadRequest && rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s: status = %d, want 400", tc.method, tc.path, rec.Code)
+		}
+	}
+}
+
+func TestMalformedBodyRejected(t *testing.T) {
+	env := newTestEnv(t)
+
+	rec := env.request(http.MethodPost, "/api/v1/containers/cid1/update", strings.NewReader(`{"include_env": nope}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed body: status = %d, want 400", rec.Code)
+	}
+
+	// empty body must keep working with defaults
+	rec = env.request(http.MethodPost, "/api/v1/containers/cid1/update", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("empty body: status = %d, want 202", rec.Code)
+	}
+}
+
 func TestGetUpdateLog(t *testing.T) {
 	env := newTestEnv(t)
 	rec := env.request(http.MethodGet, "/api/v1/update-log", nil)
