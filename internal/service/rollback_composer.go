@@ -66,18 +66,18 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 
 	var env []string
 	if includeEnv {
-		env = cfg.Env
+		env = cfg.Env()
 	}
 
 	svc := composeService{
 		Image:         pinnedImage,
 		ContainerName: cfg.Name,
-		Restart:       restartPolicyName(string(cfg.RestartPolicy.Name)),
+		Restart:       restartPolicyName(string(cfg.RestartPolicy().Name)),
 		Environment:   env,
-		Networks:      cfg.Networks,
+		Networks:      cfg.Networks(),
 	}
 
-	for port, bindings := range cfg.PortBindings {
+	for port, bindings := range cfg.PortBindings() {
 		for _, b := range bindings {
 			hostPort := b.HostPort
 			cp := port.Port()
@@ -88,7 +88,7 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 		}
 	}
 
-	svc.Volumes = append(svc.Volumes, cfg.Binds...)
+	svc.Volumes = append(svc.Volumes, cfg.Binds()...)
 
 	networks := map[string]composeNetwork{}
 	volumes := map[string]composeVolume{}
@@ -101,7 +101,7 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 	}
 
 	labels := map[string]string{}
-	for k, v := range cfg.Labels {
+	for k, v := range cfg.Labels() {
 		if !strings.HasPrefix(k, "com.docker.compose.") {
 			labels[k] = v
 		}
@@ -110,7 +110,7 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 		svc.Labels = labels
 	}
 
-	for _, n := range cfg.Networks {
+	for _, n := range cfg.Networks() {
 		networks[n] = composeNetwork{External: true}
 	}
 

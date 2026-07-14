@@ -9,26 +9,35 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 	"gopkg.in/yaml.v3"
 )
 
 func testContainerConfig() model.ContainerConfig {
 	return model.ContainerConfig{
-		Name:   "myapp",
-		Image:  "nginx:1.25",
-		Env:    []string{"FOO=bar", "SECRET=x"},
-		Labels: map[string]string{"custom.label": "v", "com.docker.compose.project": "p"},
-		Binds:  []string{"/host/data:/data"},
+		ID:    "0123456789abcdef0123",
+		Name:  "myapp",
+		Image: "nginx:1.25",
+		Config: &container.Config{
+			Image:  "nginx:1.25",
+			Env:    []string{"FOO=bar", "SECRET=x"},
+			Labels: map[string]string{"custom.label": "v", "com.docker.compose.project": "p"},
+		},
+		HostConfig: &container.HostConfig{
+			Binds: []string{"/host/data:/data"},
+			PortBindings: nat.PortMap{
+				"80/tcp": []nat.PortBinding{{HostPort: "8080"}},
+			},
+			NetworkMode:   "bridge",
+			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+		},
+		Endpoints: map[string]*network.EndpointSettings{
+			"mynet": {},
+		},
 		Mounts: []types.MountPoint{
 			{Type: "volume", Name: "appvol", Destination: "/var/lib/app"},
 		},
-		PortBindings: nat.PortMap{
-			"80/tcp": []nat.PortBinding{{HostPort: "8080"}},
-		},
-		NetworkMode:   "mynet",
-		Networks:      []string{"mynet"},
-		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
 	}
 }
 

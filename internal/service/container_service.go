@@ -92,6 +92,7 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 	}
 
 	cfg := captureContainerConfig(inspect)
+	captureNetworkDefs(ctx, s.repo, &cfg)
 
 	localDigest := ""
 	imgInspect, err := s.repo.InspectImage(ctx, inspect.Image)
@@ -159,28 +160,22 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 
 	containerCfg := &container.Config{
 		Image:      cfg.Image,
-		Cmd:        cfg.Cmd,
-		Entrypoint: cfg.Entrypoint,
-		Env:        cfg.Env,
-		Labels:     cfg.Labels,
+		Cmd:        cfg.Cmd(),
+		Entrypoint: cfg.Entrypoint(),
+		Env:        cfg.Env(),
+		Labels:     cfg.Labels(),
 	}
 	hostCfg := &container.HostConfig{
-		Binds:         cfg.Binds,
-		PortBindings:  cfg.PortBindings,
-		NetworkMode:   cfg.NetworkMode,
-		RestartPolicy: cfg.RestartPolicy,
-		AutoRemove:    cfg.AutoRemove,
-	}
-
-	for _, m := range cfg.Mounts {
-		if m.Type == "bind" {
-		}
+		Binds:         cfg.Binds(),
+		PortBindings:  cfg.PortBindings(),
+		NetworkMode:   cfg.NetworkMode(),
+		RestartPolicy: cfg.RestartPolicy(),
+		AutoRemove:    cfg.AutoRemove(),
 	}
 
 	var netCfg *network.NetworkingConfig
-	primaryNet := string(cfg.NetworkMode)
-	if primaryNet != "" && !strings.HasPrefix(primaryNet, "container:") &&
-		primaryNet != "host" && primaryNet != "none" && primaryNet != "bridge" {
+	primaryNet := string(cfg.NetworkMode())
+	if primaryNet != "" && !isDefaultNetwork(primaryNet) {
 		netCfg = &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
 				primaryNet: {},
@@ -201,7 +196,7 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 		return err
 	}
 
-	for _, netName := range cfg.Networks {
+	for _, netName := range cfg.Networks() {
 		_ = s.repo.ConnectNetwork(ctx, netName, newID, nil)
 	}
 

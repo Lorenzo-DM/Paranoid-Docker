@@ -390,23 +390,22 @@ func (s *composeStackService) doInspectBasedUpdate(ctx context.Context, stack *m
 
 		containerCfg := &container.Config{
 			Image:      cfg.Image,
-			Cmd:        cfg.Cmd,
-			Entrypoint: cfg.Entrypoint,
-			Env:        cfg.Env,
-			Labels:     cfg.Labels,
+			Cmd:        cfg.Cmd(),
+			Entrypoint: cfg.Entrypoint(),
+			Env:        cfg.Env(),
+			Labels:     cfg.Labels(),
 		}
 		hostCfg := &container.HostConfig{
-			Binds:         cfg.Binds,
-			PortBindings:  cfg.PortBindings,
-			NetworkMode:   cfg.NetworkMode,
-			RestartPolicy: cfg.RestartPolicy,
-			AutoRemove:    cfg.AutoRemove,
+			Binds:         cfg.Binds(),
+			PortBindings:  cfg.PortBindings(),
+			NetworkMode:   cfg.NetworkMode(),
+			RestartPolicy: cfg.RestartPolicy(),
+			AutoRemove:    cfg.AutoRemove(),
 		}
 
 		var netCfg *network.NetworkingConfig
-		primaryNet := string(cfg.NetworkMode)
-		if primaryNet != "" && !strings.HasPrefix(primaryNet, "container:") &&
-			primaryNet != "host" && primaryNet != "none" && primaryNet != "bridge" {
+		primaryNet := string(cfg.NetworkMode())
+		if primaryNet != "" && !isDefaultNetwork(primaryNet) {
 			netCfg = &network.NetworkingConfig{
 				EndpointsConfig: map[string]*network.EndpointSettings{
 					primaryNet: {},
@@ -427,7 +426,7 @@ func (s *composeStackService) doInspectBasedUpdate(ctx context.Context, stack *m
 			continue
 		}
 
-		for _, netName := range cfg.Networks {
+		for _, netName := range cfg.Networks() {
 			_ = s.repo.ConnectNetwork(ctx, netName, newID, nil)
 		}
 
