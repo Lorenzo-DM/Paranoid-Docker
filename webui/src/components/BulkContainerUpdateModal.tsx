@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
-import { Modal, Stack, Text, Progress, ScrollArea, Group, ThemeIcon, Button, Box, Loader } from '@mantine/core'
-import { IconCheck, IconX, IconMinus } from '@tabler/icons-react'
+import { useEffect, useRef, useState } from 'react'
+import { Modal, Stack, Text, Progress, ScrollArea, Group, ThemeIcon, Button, Box, Loader, Alert, Badge } from '@mantine/core'
+import { useMediaQuery } from '@mantine/hooks'
+import { IconCheck, IconX, IconMinus, IconAlertCircle } from '@tabler/icons-react'
+import type { PullEvent } from '../types/api'
 import { triggerUpdate, createPullStatusEventSource } from '../api/containers'
 import { getRollbackIncludeEnv } from '../settings'
+import { runSSEJob } from '../hooks/useSSEJob'
 
 type ItemStatus = 'pending' | 'running' | 'done' | 'error'
 
@@ -32,118 +35,134 @@ function StatusIcon({ status }: { status: ItemStatus }) {
   }
 }
 
+type Phase = 'confirm' | 'running' | 'done'
+
 export function BulkContainerUpdateModal({ containers, onClose }: Props) {
-  const [active, setActive] = useState<ContainerRef[]>([])
+  const [phase, setPhase] = useState<Phase>('confirm')
   const [items, setItems] = useState<ContainerItem[]>([])
   const [currentLogs, setCurrentLogs] = useState<string[]>([])
-  const [currentIndex, setCurrentIndex] = useState(-1)
-  const [finished, setFinished] = useState(false)
+  const [reconnecting, setReconnecting] = useState(false)
+  const abortRef = useRef<(() => void) | null>(null)
+  const fullScreen = useMediaQuery('(max-width: 48em)')
 
   const key = containers.map(c => c.id).join(',')
 
   useEffect(() => {
     if (containers.length === 0) return
-    const refs = [...containers]
-    setActive(refs)
-    setItems(refs.map(c => ({ ...c, status: 'pending' })))
+    setPhase('confirm')
+    setItems(containers.map(c => ({ ...c, status: 'pending' })))
     setCurrentLogs([])
-    setCurrentIndex(0)
-    setFinished(false)
+    setReconnecting(false)
+    return () => abortRef.current?.()
   }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (active.length === 0 || currentIndex < 0) return
-    if (currentIndex >= active.length) {
-      setFinished(true)
-      return
-    }
-
-    const { id } = active[currentIndex]
-    setCurrentLogs([])
-    setItems(prev => prev.map((s, i) => i === currentIndex ? { ...s, status: 'running' } : s))
-
-    let es: EventSource | null = null
-
-    triggerUpdate(id, getRollbackIncludeEnv())
-      .then(() => {
-        es = createPullStatusEventSource(id)
-
-        es.addEventListener('progress', (e) => {
-          const evt = JSON.parse(e.data)
-          const text = [evt.id, evt.status, evt.progress].filter(Boolean).join(' ')
-          if (text) setCurrentLogs(prev => [...prev, text])
+  const start = async () => {
+    setPhase('running')
+    const refs = containers
+    for (let i = 0; i < refs.length; i++) {
+      setCurrentLogs([])
+      setItems(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'running' } : s))
+      try {
+        const job = runSSEJob<PullEvent>({
+          trigger: () => triggerUpdate(refs[i].id, getRollbackIncludeEnv()),
+          createEventSource: () => createPullStatusEventSource(refs[i].id),
+          onProgress: (evt) => {
+            const text = [evt.id, evt.status, evt.progress].filter(Boolean).join(' ')
+            if (text) setCurrentLogs(prev => [...prev, text])
+          },
+          onReconnecting: () => setReconnecting(true),
+          onReconnected: () => setReconnecting(false),
         })
-
-        es.addEventListener('done', () => {
-          setItems(prev => prev.map((s, i) => i === currentIndex ? { ...s, status: 'done' } : s))
-          es?.close()
-          setCurrentIndex(i => i + 1)
-        })
-
-        es.addEventListener('error', (e) => {
-          const evt = JSON.parse((e as MessageEvent).data ?? '{}')
-          setItems(prev => prev.map((s, i) =>
-            i === currentIndex ? { ...s, status: 'error', error: evt.error ?? 'Update failed' } : s
-          ))
-          es?.close()
-          setCurrentIndex(i => i + 1)
-        })
-      })
-      .catch(err => {
-        setItems(prev => prev.map((s, i) =>
-          i === currentIndex ? { ...s, status: 'error', error: err.message } : s
+        abortRef.current = job.abort
+        await job.promise
+        setItems(prev => prev.map((s, idx) => idx === i ? { ...s, status: 'done' } : s))
+      } catch (err) {
+        setItems(prev => prev.map((s, idx) =>
+          idx === i ? { ...s, status: 'error', error: err instanceof Error ? err.message : 'Update failed' } : s
         ))
-        setCurrentIndex(i => i + 1)
-      })
-
-    return () => es?.close()
-  }, [currentIndex, active]) // eslint-disable-line react-hooks/exhaustive-deps
+      }
+      setReconnecting(false)
+    }
+    setPhase('done')
+  }
 
   const completedCount = items.filter(s => s.status === 'done' || s.status === 'error').length
-  const progress = active.length > 0 ? Math.round((completedCount / active.length) * 100) : 0
+  const progress = items.length > 0 ? Math.round((completedCount / items.length) * 100) : 0
   const hasErrors = items.some(s => s.status === 'error')
+  const finished = phase === 'done'
 
   return (
     <Modal
       opened={containers.length > 0}
       onClose={onClose}
-      title={`Bulk update — ${active.length} container${active.length !== 1 ? 's' : ''}`}
+      fullScreen={fullScreen}
+      title={
+        <Group gap="xs">
+          <Text fw={600}>Bulk update — {containers.length} container{containers.length !== 1 ? 's' : ''}</Text>
+          {reconnecting && <Badge color="yellow" variant="light" size="sm">reconnecting…</Badge>}
+        </Group>
+      }
       size="lg"
-      closeOnClickOutside={finished}
-      closeOnEscape={finished}
+      closeOnClickOutside={phase !== 'running'}
+      closeOnEscape={phase !== 'running'}
     >
       <Stack>
-        <Progress
-          value={progress}
-          animated={!finished}
-          color={finished ? (hasErrors ? 'orange' : 'green') : 'blue'}
-        />
-
-        <Box>
-          {items.map(item => (
-            <Group key={item.id} gap="xs" py={4} wrap="nowrap">
-              <StatusIcon status={item.status} />
-              <Text size="sm" ff="monospace" flex={1}>{item.name}</Text>
-              {item.error && <Text size="xs" c="red" lineClamp={1}>{item.error}</Text>}
-            </Group>
-          ))}
-        </Box>
-
-        {currentLogs.length > 0 && (
-          <ScrollArea h={100} type="auto" className="bulk-logs-scroll">
-            <Box p="xs">
-              {currentLogs.map((line, i) => (
-                <Text key={i} size="xs" ff="monospace" c="dimmed">{line}</Text>
+        {phase === 'confirm' ? (
+          <>
+            <Alert icon={<IconAlertCircle size={16} />} color="blue" title="Confirm bulk update">
+              <Text size="sm">
+                Update {containers.length} container{containers.length !== 1 ? 's' : ''} sequentially.
+                Each container gets a rollback compose file before recreation.
+              </Text>
+              <Text size="sm" mt={4}>
+                Environment in rollbacks: <Text span fw={600}>{getRollbackIncludeEnv() ? 'included' : 'excluded'}</Text>
+              </Text>
+            </Alert>
+            <Box>
+              {items.map(item => (
+                <Text key={item.id} size="sm" ff="monospace" py={2}>{item.name}</Text>
               ))}
             </Box>
-          </ScrollArea>
-        )}
+            <Group justify="flex-end">
+              <Button variant="default" onClick={onClose}>Cancel</Button>
+              <Button onClick={start}>Start updates</Button>
+            </Group>
+          </>
+        ) : (
+          <>
+            <Progress
+              value={progress}
+              animated={!finished}
+              color={finished ? (hasErrors ? 'orange' : 'green') : 'blue'}
+            />
 
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose} disabled={!finished}>
-            {finished ? 'Close' : 'Running…'}
-          </Button>
-        </Group>
+            <Box>
+              {items.map(item => (
+                <Group key={item.id} gap="xs" py={4} wrap="nowrap">
+                  <StatusIcon status={item.status} />
+                  <Text size="sm" ff="monospace" flex={1}>{item.name}</Text>
+                  {item.error && <Text size="xs" c="red" lineClamp={1}>{item.error}</Text>}
+                </Group>
+              ))}
+            </Box>
+
+            {currentLogs.length > 0 && (
+              <ScrollArea h={100} type="auto" className="bulk-logs-scroll">
+                <Box p="xs">
+                  {currentLogs.map((line, i) => (
+                    <Text key={i} size="xs" ff="monospace" c="dimmed">{line}</Text>
+                  ))}
+                </Box>
+              </ScrollArea>
+            )}
+
+            <Group justify="flex-end">
+              <Button variant="default" onClick={onClose} disabled={!finished}>
+                {finished ? 'Close' : 'Running…'}
+              </Button>
+            </Group>
+          </>
+        )}
       </Stack>
     </Modal>
   )
