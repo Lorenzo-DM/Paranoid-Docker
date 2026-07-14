@@ -278,7 +278,15 @@ func (h *Handler) DownloadStackRollback(c *echo.Context) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
-	return c.File(path)
+	return serveFile(c, path)
+}
+
+// serveFile serves a file from an arbitrary (possibly absolute) path.
+// echo's c.File resolves against its fs.FS rooted at the working
+// directory, which breaks for injected absolute dirs.
+func serveFile(c *echo.Context, path string) error {
+	http.ServeFile(c.Response(), c.Request(), path)
+	return nil
 }
 
 func (h *Handler) ListContainers(c *echo.Context) error {
@@ -416,7 +424,10 @@ func (h *Handler) DownloadRollback(c *echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	path := filepath.Join(h.rollbacksDir, name, filepath.Base(filename))
-	return c.File(path)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
+	}
+	return serveFile(c, path)
 }
 
 func (h *Handler) TriggerSaveImage(c *echo.Context) error {
@@ -490,7 +501,7 @@ func (h *Handler) DownloadImage(c *echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
 	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	return c.File(path)
+	return serveFile(c, path)
 }
 
 func (h *Handler) GetCapabilities(c *echo.Context) error {

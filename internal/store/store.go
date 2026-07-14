@@ -45,7 +45,7 @@ func (s *Store) Close() error {
 func (s *Store) LogUpdate(kind, target, operation string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO update_log (started_at, kind, target, operation) VALUES (?, ?, ?, ?)`,
-		time.Now().UTC(), kind, target, operation,
+		time.Now().UTC().Format(time.RFC3339Nano), kind, target, operation,
 	)
 	return err
 }
@@ -59,12 +59,35 @@ func (s *Store) LastUpdateByTarget() (map[string]time.Time, error) {
 	defer rows.Close()
 	result := make(map[string]time.Time)
 	for rows.Next() {
-		var target string
-		var t time.Time
-		if err := rows.Scan(&target, &t); err != nil {
+		var target, raw string
+		if err := rows.Scan(&target, &raw); err != nil {
+			return nil, err
+		}
+		t, err := parseSQLiteTime(raw)
+		if err != nil {
 			return nil, err
 		}
 		result[target] = t
 	}
 	return result, rows.Err()
+}
+
+// parseSQLiteTime parses timestamps as returned by the sqlite driver.
+// Aggregate results (MAX etc.) lose the column decltype, so the driver
+// returns strings instead of time.Time.
+func parseSQLiteTime(raw string) (time.Time, error) {
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999 -0700 MST", // legacy rows written as Go time.Time default string
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05",
+	}
+	var err error
+	for _, layout := range layouts {
+		var t time.Time
+		if t, err = time.Parse(layout, raw); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, err
 }
