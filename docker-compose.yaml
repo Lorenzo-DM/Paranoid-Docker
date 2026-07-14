@@ -3,6 +3,13 @@ services:
     image: ghcr.io/lorenzo-dm/paranoid-docker:latest
     container_name: paranoid-docker-update
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Non-root is a documented opt-in: uncomment and set the group to your
+    # host's docker socket GID (stat -c %g /var/run/docker.sock).
+    # user: "1000:<docker-gid>"
     ports:
       - "1323:1323"
     volumes:
