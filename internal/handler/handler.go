@@ -91,8 +91,6 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	api.GET("/update-log", h.GetUpdateLog)
 }
 
-
-
 func (h *Handler) ListStacks(c *echo.Context) error {
 	stacks, err := h.composeService.ListStacks(c.Request().Context())
 	if err != nil {
@@ -185,7 +183,6 @@ func (h *Handler) SnapshotStack(c *echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]string{"dir": dir})
 }
-
 
 func (h *Handler) streamStackJobStore(c *echo.Context, name string, store *StackJobStore) error {
 	sseHeaders(c)
@@ -283,8 +280,6 @@ func (h *Handler) DownloadStackRollback(c *echo.Context) error {
 	}
 	return c.File(path)
 }
-
-
 
 func (h *Handler) ListContainers(c *echo.Context) error {
 	all, err := h.containerService.GetAll(c.Request().Context())
@@ -424,8 +419,6 @@ func (h *Handler) DownloadRollback(c *echo.Context) error {
 	return c.File(path)
 }
 
-
-
 func (h *Handler) TriggerSaveImage(c *echo.Context) error {
 	id := c.Param("id")
 
@@ -499,8 +492,6 @@ func (h *Handler) DownloadImage(c *echo.Context) error {
 	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	return c.File(path)
 }
-
-
 
 func (h *Handler) GetCapabilities(c *echo.Context) error {
 	caps := h.composeService.GetCapabilities(c.Request().Context())

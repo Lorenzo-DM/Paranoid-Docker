@@ -52,7 +52,6 @@ func (s *imageSaverService) SaveImage(ctx context.Context, containerID string, p
 		imageRef = inspect.Config.Image
 	}
 
-
 	shortDigest := imageID
 	if strings.HasPrefix(shortDigest, "sha256:") {
 		shortDigest = shortDigest[7:15]
@@ -123,7 +122,7 @@ func (s *imageSaverService) ListSavedImages() ([]model.SavedImage, error) {
 	if err != nil {
 		return nil, err
 	}
- 
+
 	var images []model.SavedImage
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") {
@@ -154,7 +153,6 @@ func filenameToImageRef(filename string) string {
 	return name
 }
 
-
 func (sp SaveProgress) ToSSEEvent() string {
 	event := sp.Type
 	if event == "" {
@@ -163,7 +161,6 @@ func (sp SaveProgress) ToSSEEvent() string {
 	return fmt.Sprintf("event: %s\ndata: {\"written_bytes\":%d,\"message\":%q,\"filename\":%q,\"size_bytes\":%d,\"error\":%q}\n\n",
 		event, sp.WrittenBytes, sp.Message, sp.Filename, sp.SizeBytes, sp.Error)
 }
-
 
 func saveTimeFromFilename(_ string) time.Time {
 	return time.Now()
