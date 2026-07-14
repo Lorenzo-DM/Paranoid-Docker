@@ -6,15 +6,51 @@ import (
 	"backend/internal/store"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/labstack/echo/v5"
 )
+
+// validParamRe restricts user-supplied path params (container ids, stack
+// names, filenames) to docker-safe characters.
+var validParamRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+
+// checkParams returns a 400 response when any param is malformed, nil
+// otherwise.
+func checkParams(c *echo.Context, values ...string) error {
+	for _, v := range values {
+		if !validParamRe.MatchString(v) {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid path parameter"})
+		}
+	}
+	return nil
+}
+
+// withinBase reports whether p stays inside base after resolution.
+func withinBase(base, p string) bool {
+	rel, err := filepath.Rel(base, p)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// decodeBody decodes an optional JSON body: empty bodies leave v at its
+// defaults, malformed bodies return an error.
+func decodeBody(c *echo.Context, v any) error {
+	err := json.NewDecoder(c.Request().Body).Decode(v)
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}
 
 type Handler struct {
 	containerService        service.ContainerService
@@ -108,8 +144,13 @@ type updateRequest struct {
 
 func (h *Handler) TriggerStackUpdate(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 	var req updateRequest
-	_ = json.NewDecoder(c.Request().Body).Decode(&req)
+	if err := decodeBody(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
 
 	_ = h.store.LogUpdate("stack", name, "update")
 
@@ -125,11 +166,18 @@ func (h *Handler) TriggerStackUpdate(c *echo.Context) error {
 }
 
 func (h *Handler) StackUpdateStatus(c *echo.Context) error {
-	return h.streamStackJobStore(c, c.Param("name"), h.stackJobStore)
+	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
+	return h.streamStackJobStore(c, name, h.stackJobStore)
 }
 
 func (h *Handler) TriggerSaveStackImages(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 
 	_ = h.store.LogUpdate("stack", name, "save_images")
 
@@ -146,13 +194,21 @@ func (h *Handler) TriggerSaveStackImages(c *echo.Context) error {
 
 func (h *Handler) StackSaveStatus(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 	return h.streamStackJobStore(c, name, h.stackSaveJobStore)
 }
 
 func (h *Handler) TriggerSaveAndUpdate(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 	var req updateRequest
-	_ = json.NewDecoder(c.Request().Body).Decode(&req)
+	if err := decodeBody(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
 
 	_ = h.store.LogUpdate("stack", name, "save_and_update")
 
@@ -169,13 +225,21 @@ func (h *Handler) TriggerSaveAndUpdate(c *echo.Context) error {
 
 func (h *Handler) StackSaveUpdateStatus(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 	return h.streamStackJobStore(c, name, h.stackSaveUpdateJobStore)
 }
 
 func (h *Handler) SnapshotStack(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 	var req updateRequest
-	_ = json.NewDecoder(c.Request().Body).Decode(&req)
+	if err := decodeBody(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
 
 	dir, err := h.composeService.SnapshotStack(c.Request().Context(), name, req.IncludeEnv)
 	if err != nil {
@@ -219,6 +283,9 @@ func (h *Handler) streamStackJobStore(c *echo.Context, name string, store *Stack
 
 func (h *Handler) StreamStackLogs(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 
 	sseHeaders(c)
 	flusher, ok := c.Response().(http.Flusher)
@@ -261,6 +328,9 @@ func (h *Handler) StreamStackLogs(c *echo.Context) error {
 
 func (h *Handler) ListStackRollbacks(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 	files, err := h.composeService.ListRollbacksForStack(name)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -273,8 +343,20 @@ func (h *Handler) ListStackRollbacks(c *echo.Context) error {
 
 func (h *Handler) DownloadStackRollback(c *echo.Context) error {
 	name := c.Param("name")
+	if err := checkParams(c, name); err != nil {
+		return err
+	}
 	rest := c.Param("*")
-	path := filepath.Join(h.rollbacksDir, name, filepath.Clean(rest))
+	for _, segment := range strings.Split(rest, "/") {
+		if err := checkParams(c, segment); err != nil {
+			return err
+		}
+	}
+	base := filepath.Join(h.rollbacksDir, name)
+	path := filepath.Join(base, filepath.Clean(rest))
+	if !withinBase(base, path) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid path"})
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
@@ -305,8 +387,13 @@ func (h *Handler) ListContainers(c *echo.Context) error {
 
 func (h *Handler) TriggerUpdate(c *echo.Context) error {
 	id := c.Param("id")
+	if err := checkParams(c, id); err != nil {
+		return err
+	}
 	var req updateRequest
-	_ = json.NewDecoder(c.Request().Body).Decode(&req)
+	if err := decodeBody(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
+	}
 
 	if name, err := h.containerNameFromID(c, id); err == nil {
 		_ = h.store.LogUpdate("container", name, "update")
@@ -325,6 +412,9 @@ func (h *Handler) TriggerUpdate(c *echo.Context) error {
 
 func (h *Handler) PullStatus(c *echo.Context) error {
 	id := c.Param("id")
+	if err := checkParams(c, id); err != nil {
+		return err
+	}
 
 	sseHeaders(c)
 	flusher, ok := c.Response().(http.Flusher)
@@ -360,6 +450,9 @@ func (h *Handler) PullStatus(c *echo.Context) error {
 
 func (h *Handler) StreamLogs(c *echo.Context) error {
 	id := c.Param("id")
+	if err := checkParams(c, id); err != nil {
+		return err
+	}
 
 	sseHeaders(c)
 	flusher, ok := c.Response().(http.Flusher)
@@ -402,6 +495,9 @@ func (h *Handler) StreamLogs(c *echo.Context) error {
 
 func (h *Handler) ListRollbacks(c *echo.Context) error {
 	id := c.Param("id")
+	if err := checkParams(c, id); err != nil {
+		return err
+	}
 	name, err := h.containerNameFromID(c, id)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -419,11 +515,17 @@ func (h *Handler) ListRollbacks(c *echo.Context) error {
 func (h *Handler) DownloadRollback(c *echo.Context) error {
 	id := c.Param("id")
 	filename := c.Param("filename")
+	if err := checkParams(c, id, filename); err != nil {
+		return err
+	}
 	name, err := h.containerNameFromID(c, id)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 	path := filepath.Join(h.rollbacksDir, name, filepath.Base(filename))
+	if !withinBase(h.rollbacksDir, path) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid path"})
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
@@ -432,6 +534,9 @@ func (h *Handler) DownloadRollback(c *echo.Context) error {
 
 func (h *Handler) TriggerSaveImage(c *echo.Context) error {
 	id := c.Param("id")
+	if err := checkParams(c, id); err != nil {
+		return err
+	}
 
 	if name, err := h.containerNameFromID(c, id); err == nil {
 		_ = h.store.LogUpdate("container", name, "save_image")
@@ -450,6 +555,9 @@ func (h *Handler) TriggerSaveImage(c *echo.Context) error {
 
 func (h *Handler) SaveStatus(c *echo.Context) error {
 	id := c.Param("id")
+	if err := checkParams(c, id); err != nil {
+		return err
+	}
 
 	sseHeaders(c)
 	flusher, ok := c.Response().(http.Flusher)
@@ -495,8 +603,14 @@ func (h *Handler) ListSavedImages(c *echo.Context) error {
 }
 
 func (h *Handler) DownloadImage(c *echo.Context) error {
+	if err := checkParams(c, c.Param("filename")); err != nil {
+		return err
+	}
 	filename := filepath.Base(c.Param("filename"))
 	path := filepath.Join(h.imagesDir, filename)
+	if !withinBase(h.imagesDir, path) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid path"})
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
