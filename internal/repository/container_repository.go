@@ -22,6 +22,7 @@ type ContainerRepository interface {
 	CreateContainer(ctx context.Context, name string, cfg *container.Config, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig) (string, error)
 	StartContainer(ctx context.Context, id string) error
 	ConnectNetwork(ctx context.Context, networkID, containerID string, endpointSettings *network.EndpointSettings) error
+	NetworkInspect(ctx context.Context, nameOrID string) (network.Inspect, error)
 	ContainerLogs(ctx context.Context, id string, follow bool) (io.ReadCloser, error)
 	SaveImage(ctx context.Context, imageID string) (io.ReadCloser, error)
 	RemoveImage(ctx context.Context, imageID string) error
@@ -37,7 +38,7 @@ func NewContainerRepository(cli *client.Client) ContainerRepository {
 
 func (r *containerRepository) ListContainers(ctx context.Context) ([]types.Container, error) {
 	return r.cli.ContainerList(ctx, container.ListOptions{
-		All:     false,
+		All:     true,
 		Filters: filters.NewArgs(),
 	})
 }
@@ -77,6 +78,10 @@ func (r *containerRepository) StartContainer(ctx context.Context, id string) err
 
 func (r *containerRepository) ConnectNetwork(ctx context.Context, networkID, containerID string, endpointSettings *network.EndpointSettings) error {
 	return r.cli.NetworkConnect(ctx, networkID, containerID, endpointSettings)
+}
+
+func (r *containerRepository) NetworkInspect(ctx context.Context, nameOrID string) (network.Inspect, error) {
+	return r.cli.NetworkInspect(ctx, nameOrID, network.InspectOptions{})
 }
 
 func (r *containerRepository) ContainerLogs(ctx context.Context, id string, follow bool) (io.ReadCloser, error) {

@@ -5,6 +5,7 @@ import (
 
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -30,20 +31,111 @@ type Container struct {
 	ComposeManagedFilter bool      `json:"-"`
 }
 
+// IPAMSubnet is one IPAM pool of a custom network.
+type IPAMSubnet struct {
+	Subnet  string
+	Gateway string
+	IPRange string
+}
+
+// NetworkDef captures enough of a custom network to recreate it.
+type NetworkDef struct {
+	Name       string
+	Driver     string
+	Internal   bool
+	Attachable bool
+	EnableIPv6 bool
+	Subnets    []IPAMSubnet
+	Options    map[string]string
+	Labels     map[string]string
+}
+
+// ContainerConfig retains the raw docker inspect structs so nothing is
+// dropped at capture time. Accessors below are nil-safe.
 type ContainerConfig struct {
-	Name          string
-	Image         string
-	Cmd           []string
-	Entrypoint    []string
-	Env           []string
-	Labels        map[string]string
-	Binds         []string
-	Mounts        []dockertypes.MountPoint
-	PortBindings  nat.PortMap
-	NetworkMode   container.NetworkMode
-	Networks      []string
-	RestartPolicy container.RestartPolicy
-	AutoRemove    bool
+	ID          string
+	Name        string
+	Image       string
+	Config      *container.Config
+	HostConfig  *container.HostConfig
+	Endpoints   map[string]*network.EndpointSettings
+	Mounts      []dockertypes.MountPoint
+	NetworkDefs map[string]NetworkDef
+}
+
+func (c ContainerConfig) Env() []string {
+	if c.Config == nil {
+		return nil
+	}
+	return c.Config.Env
+}
+
+func (c ContainerConfig) Cmd() []string {
+	if c.Config == nil {
+		return nil
+	}
+	return c.Config.Cmd
+}
+
+func (c ContainerConfig) Entrypoint() []string {
+	if c.Config == nil {
+		return nil
+	}
+	return c.Config.Entrypoint
+}
+
+func (c ContainerConfig) Labels() map[string]string {
+	if c.Config == nil {
+		return nil
+	}
+	return c.Config.Labels
+}
+
+func (c ContainerConfig) Binds() []string {
+	if c.HostConfig == nil {
+		return nil
+	}
+	return c.HostConfig.Binds
+}
+
+func (c ContainerConfig) PortBindings() nat.PortMap {
+	if c.HostConfig == nil {
+		return nil
+	}
+	return c.HostConfig.PortBindings
+}
+
+func (c ContainerConfig) NetworkMode() container.NetworkMode {
+	if c.HostConfig == nil {
+		return ""
+	}
+	return c.HostConfig.NetworkMode
+}
+
+func (c ContainerConfig) RestartPolicy() container.RestartPolicy {
+	if c.HostConfig == nil {
+		return container.RestartPolicy{}
+	}
+	return c.HostConfig.RestartPolicy
+}
+
+func (c ContainerConfig) AutoRemove() bool {
+	if c.HostConfig == nil {
+		return false
+	}
+	return c.HostConfig.AutoRemove
+}
+
+// Networks returns attached network names except the one already implied
+// by NetworkMode.
+func (c ContainerConfig) Networks() []string {
+	var names []string
+	for name := range c.Endpoints {
+		if string(c.NetworkMode()) != name {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 type RollbackFile struct {

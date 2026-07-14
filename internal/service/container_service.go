@@ -11,8 +11,6 @@ import (
 	"backend/internal/repository"
 
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/stdcopy"
 )
 
@@ -92,6 +90,7 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 	}
 
 	cfg := captureContainerConfig(inspect)
+	captureNetworkDefs(ctx, s.repo, &cfg)
 
 	localDigest := ""
 	imgInspect, err := s.repo.InspectImage(ctx, inspect.Image)
@@ -144,65 +143,12 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 		}
 	}
 
-	progressCh <- PullEvent{Type: "progress", Status: "Stopping container..."}
-	timeout := 10
-	if err := s.repo.StopContainer(ctx, id, &timeout); err != nil {
-		progressCh <- PullEvent{Type: "error", Error: fmt.Sprintf("stop: %s", err)}
-		return err
-	}
-
-	progressCh <- PullEvent{Type: "progress", Status: "Removing old container..."}
-	if err := s.repo.RemoveContainer(ctx, id); err != nil {
-		progressCh <- PullEvent{Type: "error", Error: fmt.Sprintf("remove: %s", err)}
-		return err
-	}
-
-	containerCfg := &container.Config{
-		Image:      cfg.Image,
-		Cmd:        cfg.Cmd,
-		Entrypoint: cfg.Entrypoint,
-		Env:        cfg.Env,
-		Labels:     cfg.Labels,
-	}
-	hostCfg := &container.HostConfig{
-		Binds:         cfg.Binds,
-		PortBindings:  cfg.PortBindings,
-		NetworkMode:   cfg.NetworkMode,
-		RestartPolicy: cfg.RestartPolicy,
-		AutoRemove:    cfg.AutoRemove,
-	}
-
-	for _, m := range cfg.Mounts {
-		if m.Type == "bind" {
-		}
-	}
-
-	var netCfg *network.NetworkingConfig
-	primaryNet := string(cfg.NetworkMode)
-	if primaryNet != "" && !strings.HasPrefix(primaryNet, "container:") &&
-		primaryNet != "host" && primaryNet != "none" && primaryNet != "bridge" {
-		netCfg = &network.NetworkingConfig{
-			EndpointsConfig: map[string]*network.EndpointSettings{
-				primaryNet: {},
-			},
-		}
-	}
-
-	progressCh <- PullEvent{Type: "progress", Status: "Creating new container..."}
-	newID, err := s.repo.CreateContainer(ctx, cfg.Name, containerCfg, hostCfg, netCfg)
+	newID, err := recreateContainer(ctx, s.repo, cfg, func(line string) {
+		progressCh <- PullEvent{Type: "progress", Status: line}
+	})
 	if err != nil {
-		progressCh <- PullEvent{Type: "error", Error: fmt.Sprintf("create: %s", err)}
+		progressCh <- PullEvent{Type: "error", Error: err.Error()}
 		return err
-	}
-
-	progressCh <- PullEvent{Type: "progress", Status: "Starting container..."}
-	if err := s.repo.StartContainer(ctx, newID); err != nil {
-		progressCh <- PullEvent{Type: "error", Error: fmt.Sprintf("start: %s", err)}
-		return err
-	}
-
-	for _, netName := range cfg.Networks {
-		_ = s.repo.ConnectNetwork(ctx, netName, newID, nil)
 	}
 
 	progressCh <- PullEvent{

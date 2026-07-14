@@ -29,18 +29,78 @@ type composeFile struct {
 }
 
 type composeService struct {
-	Image         string            `yaml:"image"`
-	ContainerName string            `yaml:"container_name"`
-	Restart       string            `yaml:"restart,omitempty"`
-	Ports         []string          `yaml:"ports,omitempty"`
-	Volumes       []string          `yaml:"volumes,omitempty"`
-	Environment   []string          `yaml:"environment,omitempty"`
-	Networks      []string          `yaml:"networks,omitempty"`
-	Labels        map[string]string `yaml:"labels,omitempty"`
+	Image           string                               `yaml:"image"`
+	ContainerName   string                               `yaml:"container_name,omitempty"`
+	Command         []string                             `yaml:"command,omitempty"`
+	Entrypoint      []string                             `yaml:"entrypoint,omitempty"`
+	User            string                               `yaml:"user,omitempty"`
+	WorkingDir      string                               `yaml:"working_dir,omitempty"`
+	Hostname        string                               `yaml:"hostname,omitempty"`
+	DomainName      string                               `yaml:"domainname,omitempty"`
+	MacAddress      string                               `yaml:"mac_address,omitempty"`
+	StopSignal      string                               `yaml:"stop_signal,omitempty"`
+	StopGracePeriod string                               `yaml:"stop_grace_period,omitempty"`
+	Restart         string                               `yaml:"restart,omitempty"`
+	Tty             bool                                 `yaml:"tty,omitempty"`
+	StdinOpen       bool                                 `yaml:"stdin_open,omitempty"`
+	Ports           []string                             `yaml:"ports,omitempty"`
+	Volumes         []string                             `yaml:"volumes,omitempty"`
+	Tmpfs           []string                             `yaml:"tmpfs,omitempty"`
+	Devices         []string                             `yaml:"devices,omitempty"`
+	CapAdd          []string                             `yaml:"cap_add,omitempty"`
+	CapDrop         []string                             `yaml:"cap_drop,omitempty"`
+	Privileged      bool                                 `yaml:"privileged,omitempty"`
+	ReadOnly        bool                                 `yaml:"read_only,omitempty"`
+	Init            *bool                                `yaml:"init,omitempty"`
+	SecurityOpt     []string                             `yaml:"security_opt,omitempty"`
+	Sysctls         map[string]string                    `yaml:"sysctls,omitempty"`
+	Ulimits         map[string]composeUlimit             `yaml:"ulimits,omitempty"`
+	GroupAdd        []string                             `yaml:"group_add,omitempty"`
+	DNS             []string                             `yaml:"dns,omitempty"`
+	DNSSearch       []string                             `yaml:"dns_search,omitempty"`
+	DNSOpt          []string                             `yaml:"dns_opt,omitempty"`
+	ExtraHosts      []string                             `yaml:"extra_hosts,omitempty"`
+	Ipc             string                               `yaml:"ipc,omitempty"`
+	Pid             string                               `yaml:"pid,omitempty"`
+	Uts             string                               `yaml:"uts,omitempty"`
+	ShmSize         int64                                `yaml:"shm_size,omitempty"`
+	Runtime         string                               `yaml:"runtime,omitempty"`
+	Environment     []string                             `yaml:"environment,omitempty"`
+	Labels          map[string]string                    `yaml:"labels,omitempty"`
+	Logging         *composeLogging                      `yaml:"logging,omitempty"`
+	Healthcheck     *composeHealthcheck                  `yaml:"healthcheck,omitempty"`
+	NetworkMode     string                               `yaml:"network_mode,omitempty"`
+	Networks        map[string]*composeNetworkAttachment `yaml:"networks,omitempty"`
+	MemLimit        int64                                `yaml:"mem_limit,omitempty"`
+	MemReservation  int64                                `yaml:"mem_reservation,omitempty"`
+	MemswapLimit    int64                                `yaml:"memswap_limit,omitempty"`
+	CPUShares       int64                                `yaml:"cpu_shares,omitempty"`
+	CPUs            string                               `yaml:"cpus,omitempty"`
+	CpusetCpus      string                               `yaml:"cpuset,omitempty"`
+	PidsLimit       int64                                `yaml:"pids_limit,omitempty"`
+	OomScoreAdj     int                                  `yaml:"oom_score_adj,omitempty"`
 }
 
 type composeNetwork struct {
-	External bool `yaml:"external"`
+	External   bool              `yaml:"external,omitempty"`
+	Name       string            `yaml:"name,omitempty"`
+	Driver     string            `yaml:"driver,omitempty"`
+	Internal   bool              `yaml:"internal,omitempty"`
+	Attachable bool              `yaml:"attachable,omitempty"`
+	EnableIPv6 bool              `yaml:"enable_ipv6,omitempty"`
+	IPAM       *composeIPAM      `yaml:"ipam,omitempty"`
+	DriverOpts map[string]string `yaml:"driver_opts,omitempty"`
+	Labels     map[string]string `yaml:"labels,omitempty"`
+}
+
+type composeIPAM struct {
+	Config []composeIPAMPool `yaml:"config,omitempty"`
+}
+
+type composeIPAMPool struct {
+	Subnet  string `yaml:"subnet,omitempty"`
+	Gateway string `yaml:"gateway,omitempty"`
+	IPRange string `yaml:"ip_range,omitempty"`
 }
 
 type composeVolume struct {
@@ -64,55 +124,8 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 		pinnedImage = cfg.Image
 	}
 
-	var env []string
-	if includeEnv {
-		env = cfg.Env
-	}
-
-	svc := composeService{
-		Image:         pinnedImage,
-		ContainerName: cfg.Name,
-		Restart:       restartPolicyName(string(cfg.RestartPolicy.Name)),
-		Environment:   env,
-		Networks:      cfg.Networks,
-	}
-
-	for port, bindings := range cfg.PortBindings {
-		for _, b := range bindings {
-			hostPort := b.HostPort
-			cp := port.Port()
-			proto := port.Proto()
-			if hostPort != "" {
-				svc.Ports = append(svc.Ports, fmt.Sprintf("%s:%s/%s", hostPort, cp, proto))
-			}
-		}
-	}
-
-	svc.Volumes = append(svc.Volumes, cfg.Binds...)
-
-	networks := map[string]composeNetwork{}
-	volumes := map[string]composeVolume{}
-
-	for _, m := range cfg.Mounts {
-		if m.Type == "volume" && m.Name != "" {
-			svc.Volumes = append(svc.Volumes, fmt.Sprintf("%s:%s", m.Name, m.Destination))
-			volumes[m.Name] = composeVolume{External: true}
-		}
-	}
-
-	labels := map[string]string{}
-	for k, v := range cfg.Labels {
-		if !strings.HasPrefix(k, "com.docker.compose.") {
-			labels[k] = v
-		}
-	}
-	if len(labels) > 0 {
-		svc.Labels = labels
-	}
-
-	for _, n := range cfg.Networks {
-		networks[n] = composeNetwork{External: true}
-	}
+	svc, volumes := buildComposeService(cfg, pinnedImage, includeEnv)
+	networks, createCmds := buildNetworksSection(cfg, svc.Networks, "")
 
 	cf := composeFile{
 		Services: map[string]composeService{cfg.Name: svc},
@@ -124,8 +137,8 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 		cf.Volumes = volumes
 	}
 
-	header := fmt.Sprintf("# Rollback for container: %s\n# Generated: %s\n# Previous image: %s\n\n",
-		cfg.Name, now.Format(time.RFC3339), pinnedImage)
+	header := fmt.Sprintf("# Rollback for container: %s\n# Generated: %s\n# Previous image: %s\n%s\n",
+		cfg.Name, now.Format(time.RFC3339), pinnedImage, networkCommandsHeader(createCmds))
 
 	data, err := yaml.Marshal(cf)
 	if err != nil {

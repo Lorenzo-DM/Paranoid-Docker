@@ -34,6 +34,8 @@ type fakeRepo struct {
 	connectErr    error
 	logsBody      string
 	logsErr       error
+	networks      map[string]network.Inspect
+	networkErr    error
 	saveBody      string
 	saveErr       error
 	removeImgErr  error
@@ -48,6 +50,7 @@ func newFakeRepo() *fakeRepo {
 	return &fakeRepo{
 		inspects:      map[string]types.ContainerJSON{},
 		imageInspects: map[string]types.ImageInspect{},
+		networks:      map[string]network.Inspect{},
 		createID:      "new-container-id",
 	}
 }
@@ -131,6 +134,17 @@ func (f *fakeRepo) StartContainer(ctx context.Context, id string) error {
 func (f *fakeRepo) ConnectNetwork(ctx context.Context, networkID, containerID string, endpointSettings *network.EndpointSettings) error {
 	f.record("ConnectNetwork:" + networkID)
 	return f.connectErr
+}
+
+func (f *fakeRepo) NetworkInspect(ctx context.Context, nameOrID string) (network.Inspect, error) {
+	f.record("NetworkInspect:" + nameOrID)
+	if f.networkErr != nil {
+		return network.Inspect{}, f.networkErr
+	}
+	if nw, ok := f.networks[nameOrID]; ok {
+		return nw, nil
+	}
+	return network.Inspect{}, fmt.Errorf("no such network: %s", nameOrID)
 }
 
 func (f *fakeRepo) ContainerLogs(ctx context.Context, id string, follow bool) (io.ReadCloser, error) {

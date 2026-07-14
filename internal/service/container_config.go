@@ -1,75 +1,72 @@
 package service
 
 import (
+	"context"
 	"strings"
 
 	"backend/internal/model"
+	"backend/internal/repository"
 
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
 )
 
 func captureContainerConfig(inspect types.ContainerJSON) model.ContainerConfig {
-	name := strings.TrimPrefix(inspect.Name, "/")
-
-	var portBindings nat.PortMap
-	if inspect.HostConfig != nil {
-		portBindings = inspect.HostConfig.PortBindings
+	cfg := model.ContainerConfig{
+		Mounts: inspect.Mounts,
 	}
-
-	var networkMode container.NetworkMode
-	var restartPolicy container.RestartPolicy
-	var binds []string
-	var autoRemove bool
-
-	if inspect.HostConfig != nil {
-		networkMode = inspect.HostConfig.NetworkMode
-		restartPolicy = inspect.HostConfig.RestartPolicy
-		binds = inspect.HostConfig.Binds
-		autoRemove = inspect.HostConfig.AutoRemove
+	if inspect.ContainerJSONBase != nil {
+		cfg.ID = inspect.ID
+		cfg.Name = strings.TrimPrefix(inspect.Name, "/")
+		cfg.HostConfig = inspect.HostConfig
 	}
-
-	var cmd, entrypoint []string
-	var env []string
-	var labels map[string]string
-	var image string
-
 	if inspect.Config != nil {
-		cmd = inspect.Config.Cmd
-		entrypoint = inspect.Config.Entrypoint
-		env = inspect.Config.Env
-		labels = inspect.Config.Labels
-		image = inspect.Config.Image
+		cfg.Config = inspect.Config
+		cfg.Image = inspect.Config.Image
 	}
-
-	var networks []string
 	if inspect.NetworkSettings != nil {
-		for netName := range inspect.NetworkSettings.Networks {
-			if string(networkMode) != netName {
-				networks = append(networks, netName)
-			}
+		cfg.Endpoints = inspect.NetworkSettings.Networks
+	}
+	return cfg
+}
+
+// isDefaultNetwork reports whether name is a docker built-in network that
+// must not be redefined in a compose file.
+func isDefaultNetwork(name string) bool {
+	return name == "bridge" || name == "host" || name == "none" ||
+		strings.HasPrefix(name, "container:")
+}
+
+// captureNetworkDefs inspects every custom network the container is
+// attached to and stores a recreatable definition on cfg.
+func captureNetworkDefs(ctx context.Context, repo repository.ContainerRepository, cfg *model.ContainerConfig) {
+	defs := map[string]model.NetworkDef{}
+	for name := range cfg.Endpoints {
+		if isDefaultNetwork(name) {
+			continue
 		}
+		nw, err := repo.NetworkInspect(ctx, name)
+		if err != nil {
+			continue
+		}
+		def := model.NetworkDef{
+			Name:       nw.Name,
+			Driver:     nw.Driver,
+			Internal:   nw.Internal,
+			Attachable: nw.Attachable,
+			EnableIPv6: nw.EnableIPv6,
+			Options:    nw.Options,
+			Labels:     nw.Labels,
+		}
+		for _, pool := range nw.IPAM.Config {
+			def.Subnets = append(def.Subnets, model.IPAMSubnet{
+				Subnet:  pool.Subnet,
+				Gateway: pool.Gateway,
+				IPRange: pool.IPRange,
+			})
+		}
+		defs[name] = def
 	}
-
-	var mounts []types.MountPoint
-	if inspect.Mounts != nil {
-		mounts = inspect.Mounts
-	}
-
-	return model.ContainerConfig{
-		Name:          name,
-		Image:         image,
-		Cmd:           cmd,
-		Entrypoint:    entrypoint,
-		Env:           env,
-		Labels:        labels,
-		Binds:         binds,
-		Mounts:        mounts,
-		PortBindings:  portBindings,
-		NetworkMode:   networkMode,
-		Networks:      networks,
-		RestartPolicy: restartPolicy,
-		AutoRemove:    autoRemove,
+	if len(defs) > 0 {
+		cfg.NetworkDefs = defs
 	}
 }
