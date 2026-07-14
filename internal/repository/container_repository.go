@@ -38,7 +38,7 @@ func NewContainerRepository(cli *client.Client) ContainerRepository {
 
 func (r *containerRepository) ListContainers(ctx context.Context) ([]types.Container, error) {
 	return r.cli.ContainerList(ctx, container.ListOptions{
-		All:     false,
+		All:     true,
 		Filters: filters.NewArgs(),
 	})
 }
