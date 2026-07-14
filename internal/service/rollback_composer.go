@@ -12,6 +12,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RollbackWriter writes and lists rollback compose files under BaseDir.
+type RollbackWriter struct {
+	BaseDir string
+	Runner  CommandRunner
+}
+
+func NewRollbackWriter(baseDir string, runner CommandRunner) *RollbackWriter {
+	return &RollbackWriter{BaseDir: baseDir, Runner: runner}
+}
+
 type composeFile struct {
 	Services map[string]composeService `yaml:"services"`
 	Networks map[string]composeNetwork `yaml:"networks,omitempty"`
@@ -37,11 +47,11 @@ type composeVolume struct {
 	External bool `yaml:"external"`
 }
 
-func WriteRollbackCompose(cfg model.ContainerConfig, imageDigest string, includeEnv bool) (string, error) {
+func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDigest string, includeEnv bool) (string, error) {
 	now := time.Now().UTC()
 	timestamp := now.Format("2006-01-02T15-04-05")
 
-	dir := filepath.Join("rollbacks", cfg.Name)
+	dir := filepath.Join(w.BaseDir, cfg.Name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create rollbacks dir: %w", err)
 	}
@@ -138,8 +148,8 @@ func restartPolicyName(name string) string {
 	}
 }
 
-func ListRollbacks(containerName string) ([]model.RollbackFile, error) {
-	dir := filepath.Join("rollbacks", containerName)
+func (w *RollbackWriter) ListRollbacks(containerName string) ([]model.RollbackFile, error) {
+	dir := filepath.Join(w.BaseDir, containerName)
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return []model.RollbackFile{}, nil

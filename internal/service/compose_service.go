@@ -33,11 +33,12 @@ type composeStackService struct {
 	digestChecker DigestChecker
 	imageSaver    ImageSaverService
 	runner        CommandRunner
+	rollback      *RollbackWriter
 	rollbackMode  string // "auto" | "compose" | "inspect"
 }
 
-func NewComposeStackService(repo repository.ContainerRepository, dc DigestChecker, is ImageSaverService, runner CommandRunner) ComposeStackService {
-	return &composeStackService{repo: repo, digestChecker: dc, imageSaver: is, runner: runner, rollbackMode: "auto"}
+func NewComposeStackService(repo repository.ContainerRepository, dc DigestChecker, is ImageSaverService, runner CommandRunner, rw *RollbackWriter) ComposeStackService {
+	return &composeStackService{repo: repo, digestChecker: dc, imageSaver: is, runner: runner, rollback: rw, rollbackMode: "auto"}
 }
 
 func (s *composeStackService) GetRollbackMode() string { return s.rollbackMode }
@@ -231,7 +232,7 @@ func (s *composeStackService) SnapshotStack(ctx context.Context, name string, in
 	if err != nil {
 		return "", err
 	}
-	return WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles), s.runner)
+	return s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
 }
 
 func (s *composeStackService) findStack(ctx context.Context, name string) (*model.ComposeStack, error) {
@@ -282,7 +283,7 @@ func (s *composeStackService) doSaveStackImages(ctx context.Context, stack *mode
 
 func (s *composeStackService) doUpdateStack(ctx context.Context, stack *model.ComposeStack, eventCh chan<- model.StackEvent, includeEnv bool) error {
 	eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: "Saving rollback snapshot..."}
-	rollbackDir, err := WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles), s.runner)
+	rollbackDir, err := s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
 	if err != nil {
 		eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("WARNING: rollback snapshot failed: %s", err)}
 	} else {
@@ -492,7 +493,7 @@ func (s *composeStackService) streamInspectLogs(ctx context.Context, st model.Co
 }
 
 func (s *composeStackService) ListRollbacksForStack(name string) ([]model.RollbackFile, error) {
-	return ListStackRollbacks(name)
+	return s.rollback.ListStackRollbacks(name)
 }
 
 func splitConfigFiles(raw string) []string {

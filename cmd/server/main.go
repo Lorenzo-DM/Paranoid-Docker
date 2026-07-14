@@ -74,9 +74,12 @@ func main() {
 	repo := repository.NewContainerRepository(dockerCli)
 	digestChecker := service.NewDigestChecker(repo)
 
+	runner := service.NewExecRunner()
+	rollbackWriter := service.NewRollbackWriter("rollbacks", runner)
+
 	imageSaverSvc := service.NewImageSaverService(repo)
-	containerSvc := service.NewContainerService(repo, digestChecker)
-	composeSvc := service.NewComposeStackService(repo, digestChecker, imageSaverSvc, service.NewExecRunner())
+	containerSvc := service.NewContainerService(repo, digestChecker, rollbackWriter)
+	composeSvc := service.NewComposeStackService(repo, digestChecker, imageSaverSvc, runner, rollbackWriter)
 
 	jobStore := handler.NewJobStore()
 	saveJobStore := handler.NewSaveJobStore()
