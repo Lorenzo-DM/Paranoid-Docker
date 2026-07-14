@@ -370,7 +370,14 @@ func (s *composeStackService) doInspectBasedUpdate(ctx context.Context, stack *m
 		go ParsePullStream(pullStream, pullCh)
 		for evt := range pullCh {
 			if evt.Status != "" {
-				eventCh <- model.StackEvent{Type: "progress", Step: "pull", Line: fmt.Sprintf("[%s] %s", svc.Name, evt.Status)}
+				eventCh <- model.StackEvent{
+					Type:    "progress",
+					Step:    "pull",
+					Line:    fmt.Sprintf("[%s] %s", svc.Name, evt.Status),
+					LayerID: evt.ID,
+					Current: evt.Current,
+					Total:   evt.Total,
+				}
 			}
 		}
 

@@ -13,6 +13,8 @@ type PullEvent struct {
 	ID       string `json:"id,omitempty"`
 	Error    string `json:"error,omitempty"`
 	Message  string `json:"message,omitempty"`
+	Current  int64  `json:"current,omitempty"`
+	Total    int64  `json:"total,omitempty"`
 }
 
 type dockerPullLine struct {
@@ -45,6 +47,8 @@ func ParsePullStream(r io.ReadCloser, ch chan<- PullEvent) {
 			Status:   line.Status,
 			Progress: line.Progress,
 			ID:       line.ID,
+			Current:  line.ProgressDetail.Current,
+			Total:    line.ProgressDetail.Total,
 		}
 	}
 }
