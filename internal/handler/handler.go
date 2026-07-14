@@ -26,6 +26,8 @@ type Handler struct {
 	stackJobStore           *StackJobStore
 	stackSaveJobStore       *StackJobStore
 	stackSaveUpdateJobStore *StackJobStore
+	rollbacksDir            string
+	imagesDir               string
 }
 
 func NewHandler(
@@ -38,6 +40,8 @@ func NewHandler(
 	stjs *StackJobStore,
 	stSaveJs *StackJobStore,
 	stSaveUpJs *StackJobStore,
+	rollbacksDir string,
+	imagesDir string,
 ) *Handler {
 	return &Handler{
 		containerService:        cs,
@@ -49,6 +53,8 @@ func NewHandler(
 		stackJobStore:           stjs,
 		stackSaveJobStore:       stSaveJs,
 		stackSaveUpdateJobStore: stSaveUpJs,
+		rollbacksDir:            rollbacksDir,
+		imagesDir:               imagesDir,
 	}
 }
 
@@ -271,7 +277,7 @@ func (h *Handler) ListStackRollbacks(c *echo.Context) error {
 func (h *Handler) DownloadStackRollback(c *echo.Context) error {
 	name := c.Param("name")
 	rest := c.Param("*")
-	path := filepath.Join("rollbacks", name, filepath.Clean(rest))
+	path := filepath.Join(h.rollbacksDir, name, filepath.Clean(rest))
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
@@ -414,7 +420,7 @@ func (h *Handler) DownloadRollback(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-	path := filepath.Join("rollbacks", name, filepath.Base(filename))
+	path := filepath.Join(h.rollbacksDir, name, filepath.Base(filename))
 	return c.File(path)
 }
 
@@ -486,7 +492,7 @@ func (h *Handler) ListSavedImages(c *echo.Context) error {
 
 func (h *Handler) DownloadImage(c *echo.Context) error {
 	filename := filepath.Base(c.Param("filename"))
-	path := filepath.Join("images", filename)
+	path := filepath.Join(h.imagesDir, filename)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
