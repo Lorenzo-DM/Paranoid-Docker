@@ -4,13 +4,15 @@ import { fetchCapabilities, setRollbackMode } from '../api/containers'
 
 export function useCapabilities() {
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
       const data = await fetchCapabilities()
       setCapabilities(data)
-    } catch {
-      // capabilities endpoint failure is non-fatal
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch capabilities')
     }
   }, [])
 
@@ -23,5 +25,5 @@ export function useCapabilities() {
     refresh()
   }, [refresh])
 
-  return { capabilities, changeMode, refresh }
+  return { capabilities, error, changeMode, refresh }
 }
