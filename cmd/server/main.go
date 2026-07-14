@@ -36,6 +36,24 @@ func loadEnv() {
 	}
 }
 
+// securityHeaders sets the standard browser hardening headers.
+// style-src allows 'unsafe-inline' because Mantine emits inline style
+// attributes; everything else is restricted to same-origin.
+func securityHeaders(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		h := c.Response().Header()
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "+
+				"object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		return next(c)
+	}
+}
+
 func main() {
 	loadEnv()
 	e := echo.New()
@@ -48,6 +66,8 @@ func main() {
 
 	e.Use(middleware.RequestLogger())
 	e.Use(middleware.Recover())
+	e.Use(middleware.BodyLimit(64 * 1024))
+	e.Use(securityHeaders)
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: origins,
 		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodOptions},
