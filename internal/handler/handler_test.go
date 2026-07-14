@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"backend/internal/model"
 	"backend/internal/service"
@@ -135,9 +136,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	rollbacksDir := t.TempDir()
 	imagesDir := t.TempDir()
 
-	h := NewHandler(cs, cps, is, db,
-		NewJobStore(), NewSaveJobStore(), NewStackJobStore(), NewStackJobStore(), NewStackJobStore(),
-		rollbacksDir, imagesDir)
+	h := NewHandler(cs, cps, is, db, rollbacksDir, imagesDir)
 
 	e := echo.New()
 	h.RegisterRoutes(e)
@@ -339,6 +338,74 @@ func TestMalformedBodyRejected(t *testing.T) {
 	rec = env.request(http.MethodPost, "/api/v1/containers/cid1/update", nil)
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("empty body: status = %d, want 202", rec.Code)
+	}
+}
+
+func waitForBody(t *testing.T, env *testEnv, path string, want string) *httptest.ResponseRecorder {
+	t.Helper()
+	var rec *httptest.ResponseRecorder
+	for i := 0; i < 50; i++ {
+		rec = env.request(http.MethodGet, path, nil)
+		if strings.Contains(rec.Body.String(), want) {
+			return rec
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("body never contained %q; last: %s", want, rec.Body.String())
+	return rec
+}
+
+func TestPullStatusReplaysAfterCompletion(t *testing.T) {
+	env := newTestEnv(t)
+
+	rec := env.request(http.MethodPost, "/api/v1/containers/cid1/update", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("trigger: %d", rec.Code)
+	}
+
+	// job finishes almost instantly (fake service); a late subscriber
+	// must still get the full history
+	rec = waitForBody(t, env, "/api/v1/containers/cid1/pull-status", "event: done")
+	body := rec.Body.String()
+	if !strings.Contains(body, "Pulling...") {
+		t.Errorf("replay missing progress event: %s", body)
+	}
+	if !strings.Contains(body, "id: 1") || !strings.Contains(body, "id: 2") {
+		t.Errorf("SSE ids missing: %s", body)
+	}
+
+	// reconnect with Last-Event-ID replays only the tail
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid1/pull-status", nil)
+	req.Header.Set("Last-Event-ID", "1")
+	rec2 := httptest.NewRecorder()
+	env.e.ServeHTTP(rec2, req)
+	tail := rec2.Body.String()
+	if strings.Contains(tail, "Pulling...") {
+		t.Errorf("already-seen event replayed: %s", tail)
+	}
+	if !strings.Contains(tail, "event: done") {
+		t.Errorf("tail missing done event: %s", tail)
+	}
+}
+
+func TestStackUpdateStatusReplays(t *testing.T) {
+	env := newTestEnv(t)
+
+	rec := env.request(http.MethodPost, "/api/v1/stacks/s1/update", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("trigger: %d", rec.Code)
+	}
+	rec = waitForBody(t, env, "/api/v1/stacks/s1/update-status", "event: done")
+	if !strings.Contains(rec.Body.String(), "pulling") {
+		t.Errorf("replay missing progress: %s", rec.Body.String())
+	}
+}
+
+func TestStatusForUnknownJob(t *testing.T) {
+	env := newTestEnv(t)
+	rec := env.request(http.MethodGet, "/api/v1/containers/nojob/pull-status", nil)
+	if !strings.Contains(rec.Body.String(), "no active update job") {
+		t.Errorf("body = %s", rec.Body.String())
 	}
 }
 

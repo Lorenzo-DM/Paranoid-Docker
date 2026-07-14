@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/labstack/echo/v5"
@@ -57,11 +58,11 @@ type Handler struct {
 	composeService          service.ComposeStackService
 	imageSaver              service.ImageSaverService
 	store                   *store.Store
-	jobStore                *JobStore
-	saveJobStore            *SaveJobStore
-	stackJobStore           *StackJobStore
-	stackSaveJobStore       *StackJobStore
-	stackSaveUpdateJobStore *StackJobStore
+	jobStore                *JobBuffer[service.PullEvent]
+	saveJobStore            *JobBuffer[service.SaveProgress]
+	stackJobStore           *JobBuffer[model.StackEvent]
+	stackSaveJobStore       *JobBuffer[model.StackEvent]
+	stackSaveUpdateJobStore *JobBuffer[model.StackEvent]
 	rollbacksDir            string
 	imagesDir               string
 }
@@ -71,11 +72,6 @@ func NewHandler(
 	cps service.ComposeStackService,
 	is service.ImageSaverService,
 	st *store.Store,
-	js *JobStore,
-	sjs *SaveJobStore,
-	stjs *StackJobStore,
-	stSaveJs *StackJobStore,
-	stSaveUpJs *StackJobStore,
 	rollbacksDir string,
 	imagesDir string,
 ) *Handler {
@@ -84,11 +80,11 @@ func NewHandler(
 		composeService:          cps,
 		imageSaver:              is,
 		store:                   st,
-		jobStore:                js,
-		saveJobStore:            sjs,
-		stackJobStore:           stjs,
-		stackSaveJobStore:       stSaveJs,
-		stackSaveUpdateJobStore: stSaveUpJs,
+		jobStore:                NewJobBuffer[service.PullEvent](),
+		saveJobStore:            NewJobBuffer[service.SaveProgress](),
+		stackJobStore:           NewJobBuffer[model.StackEvent](),
+		stackSaveJobStore:       NewJobBuffer[model.StackEvent](),
+		stackSaveUpdateJobStore: NewJobBuffer[model.StackEvent](),
 		rollbacksDir:            rollbacksDir,
 		imagesDir:               imagesDir,
 	}
@@ -155,10 +151,9 @@ func (h *Handler) TriggerStackUpdate(c *echo.Context) error {
 	_ = h.store.LogUpdate("stack", name, "update")
 
 	ch := make(chan model.StackEvent, 256)
-	h.stackJobStore.Set(name, ch)
+	h.stackJobStore.Start(name, ch)
 
 	go func() {
-		defer h.stackJobStore.Delete(name)
 		_ = h.composeService.UpdateStack(context.Background(), name, ch, req.IncludeEnv)
 	}()
 
@@ -170,7 +165,7 @@ func (h *Handler) StackUpdateStatus(c *echo.Context) error {
 	if err := checkParams(c, name); err != nil {
 		return err
 	}
-	return h.streamStackJobStore(c, name, h.stackJobStore)
+	return streamJobBuffer(c, h.stackJobStore, name, stackEventType, "no active job for stack "+name)
 }
 
 func (h *Handler) TriggerSaveStackImages(c *echo.Context) error {
@@ -182,10 +177,9 @@ func (h *Handler) TriggerSaveStackImages(c *echo.Context) error {
 	_ = h.store.LogUpdate("stack", name, "save_images")
 
 	ch := make(chan model.StackEvent, 256)
-	h.stackSaveJobStore.Set(name, ch)
+	h.stackSaveJobStore.Start(name, ch)
 
 	go func() {
-		defer h.stackSaveJobStore.Delete(name)
 		_ = h.composeService.SaveStackImages(context.Background(), name, ch)
 	}()
 
@@ -197,7 +191,7 @@ func (h *Handler) StackSaveStatus(c *echo.Context) error {
 	if err := checkParams(c, name); err != nil {
 		return err
 	}
-	return h.streamStackJobStore(c, name, h.stackSaveJobStore)
+	return streamJobBuffer(c, h.stackSaveJobStore, name, stackEventType, "no active job for stack "+name)
 }
 
 func (h *Handler) TriggerSaveAndUpdate(c *echo.Context) error {
@@ -213,10 +207,9 @@ func (h *Handler) TriggerSaveAndUpdate(c *echo.Context) error {
 	_ = h.store.LogUpdate("stack", name, "save_and_update")
 
 	ch := make(chan model.StackEvent, 256)
-	h.stackSaveUpdateJobStore.Set(name, ch)
+	h.stackSaveUpdateJobStore.Start(name, ch)
 
 	go func() {
-		defer h.stackSaveUpdateJobStore.Delete(name)
 		_ = h.composeService.SaveAndUpdateStack(context.Background(), name, ch, req.IncludeEnv)
 	}()
 
@@ -228,7 +221,7 @@ func (h *Handler) StackSaveUpdateStatus(c *echo.Context) error {
 	if err := checkParams(c, name); err != nil {
 		return err
 	}
-	return h.streamStackJobStore(c, name, h.stackSaveUpdateJobStore)
+	return streamJobBuffer(c, h.stackSaveUpdateJobStore, name, stackEventType, "no active job for stack "+name)
 }
 
 func (h *Handler) SnapshotStack(c *echo.Context) error {
@@ -248,7 +241,17 @@ func (h *Handler) SnapshotStack(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"dir": dir})
 }
 
-func (h *Handler) streamStackJobStore(c *echo.Context, name string, store *StackJobStore) error {
+func stackEventType(evt model.StackEvent) string { return evt.Type }
+
+func pullEventType(evt service.PullEvent) string { return evt.Type }
+
+func saveEventType(evt service.SaveProgress) string { return evt.Type }
+
+// streamJobBuffer streams a buffered job as SSE. Every event carries an
+// `id:` field so the browser's automatic reconnect (Last-Event-ID)
+// resumes exactly where the stream dropped; a fresh subscriber replays
+// the full history first, then follows live.
+func streamJobBuffer[T any](c *echo.Context, buf *JobBuffer[T], id string, typeOf func(T) string, notFound string) error {
 	sseHeaders(c)
 	flusher, ok := c.Response().(http.Flusher)
 	if !ok {
@@ -256,25 +259,35 @@ func (h *Handler) streamStackJobStore(c *echo.Context, name string, store *Stack
 	}
 	c.Response().WriteHeader(http.StatusOK)
 
-	ch, exists := store.Get(name)
+	job, exists := buf.Get(id)
 	if !exists {
-		writeSSEEvent(c.Response(), "error", map[string]string{"message": "no active job for stack " + name})
+		writeSSEEvent(c.Response(), "error", map[string]string{"message": notFound})
 		flusher.Flush()
 		return nil
 	}
 
+	idx := 0
+	if lastID := c.Request().Header.Get("Last-Event-ID"); lastID != "" {
+		if n, err := strconv.Atoi(lastID); err == nil && n > 0 {
+			idx = n
+		}
+	}
+
 	ctx := c.Request().Context()
 	for {
-		select {
-		case evt, open := <-ch:
-			if !open {
-				return nil
-			}
-			writeSSEEvent(c.Response(), evt.Type, evt)
+		events, done, changed := job.snapshotAfter(idx)
+		for _, evt := range events {
+			idx++
+			writeSSEEventWithID(c.Response(), idx, typeOf(evt), evt)
+		}
+		if len(events) > 0 {
 			flusher.Flush()
-			if evt.Type == "done" || evt.Type == "error" {
-				return nil
-			}
+		}
+		if done {
+			return nil
+		}
+		select {
+		case <-changed:
 		case <-ctx.Done():
 			return nil
 		}
@@ -400,10 +413,9 @@ func (h *Handler) TriggerUpdate(c *echo.Context) error {
 	}
 
 	ch := make(chan service.PullEvent, 128)
-	h.jobStore.Set(id, ch)
+	h.jobStore.Start(id, ch)
 
 	go func() {
-		defer h.jobStore.Delete(id)
 		_ = h.containerService.UpdateContainer(context.Background(), id, ch, req.IncludeEnv)
 	}()
 
@@ -415,37 +427,7 @@ func (h *Handler) PullStatus(c *echo.Context) error {
 	if err := checkParams(c, id); err != nil {
 		return err
 	}
-
-	sseHeaders(c)
-	flusher, ok := c.Response().(http.Flusher)
-	if !ok {
-		return echo.NewHTTPError(http.StatusInternalServerError, "streaming unsupported")
-	}
-	c.Response().WriteHeader(http.StatusOK)
-
-	ch, exists := h.jobStore.Get(id)
-	if !exists {
-		writeSSEEvent(c.Response(), "error", map[string]string{"message": "no active update job for this container"})
-		flusher.Flush()
-		return nil
-	}
-
-	ctx := c.Request().Context()
-	for {
-		select {
-		case evt, open := <-ch:
-			if !open {
-				return nil
-			}
-			writeSSEEvent(c.Response(), evt.Type, evt)
-			flusher.Flush()
-			if evt.Type == "done" || evt.Type == "error" {
-				return nil
-			}
-		case <-ctx.Done():
-			return nil
-		}
-	}
+	return streamJobBuffer(c, h.jobStore, id, pullEventType, "no active update job for this container")
 }
 
 func (h *Handler) StreamLogs(c *echo.Context) error {
@@ -543,10 +525,9 @@ func (h *Handler) TriggerSaveImage(c *echo.Context) error {
 	}
 
 	ch := make(chan service.SaveProgress, 128)
-	h.saveJobStore.Set(id, ch)
+	h.saveJobStore.Start(id, ch)
 
 	go func() {
-		defer h.saveJobStore.Delete(id)
 		_ = h.imageSaver.SaveImage(context.Background(), id, ch)
 	}()
 
@@ -558,37 +539,7 @@ func (h *Handler) SaveStatus(c *echo.Context) error {
 	if err := checkParams(c, id); err != nil {
 		return err
 	}
-
-	sseHeaders(c)
-	flusher, ok := c.Response().(http.Flusher)
-	if !ok {
-		return echo.NewHTTPError(http.StatusInternalServerError, "streaming unsupported")
-	}
-	c.Response().WriteHeader(http.StatusOK)
-
-	ch, exists := h.saveJobStore.Get(id)
-	if !exists {
-		writeSSEEvent(c.Response(), "error", map[string]string{"message": "no active save job for this container"})
-		flusher.Flush()
-		return nil
-	}
-
-	ctx := c.Request().Context()
-	for {
-		select {
-		case evt, open := <-ch:
-			if !open {
-				return nil
-			}
-			writeSSEEvent(c.Response(), evt.Type, evt)
-			flusher.Flush()
-			if evt.Type == "done" || evt.Type == "error" {
-				return nil
-			}
-		case <-ctx.Done():
-			return nil
-		}
-	}
+	return streamJobBuffer(c, h.saveJobStore, id, saveEventType, "no active save job for this container")
 }
 
 func (h *Handler) ListSavedImages(c *echo.Context) error {
@@ -674,4 +625,9 @@ func sseHeaders(c *echo.Context) {
 func writeSSEEvent(w io.Writer, event string, data interface{}) {
 	b, _ := json.Marshal(data)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
+}
+
+func writeSSEEventWithID(w io.Writer, id int, event string, data interface{}) {
+	b, _ := json.Marshal(data)
+	fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", id, event, b)
 }
