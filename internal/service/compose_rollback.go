@@ -35,12 +35,32 @@ func (w *RollbackWriter) WriteStackRollback(
 	return w.writeRollbackFromInspect(ctx, stack, repo, includeEnv, dir, now)
 }
 
-func configFileAccessible(configFiles []string) bool {
+// safeComposeContext validates compose file paths and working dir taken
+// from container labels before they are passed to the docker CLI: all
+// paths must be absolute, existing, and must not look like flags.
+func safeComposeContext(configFiles []string, workingDir string) bool {
 	if len(configFiles) == 0 {
 		return false
 	}
-	_, err := os.Stat(configFiles[0])
-	return err == nil
+	for _, f := range configFiles {
+		if !filepath.IsAbs(f) || strings.HasPrefix(filepath.Base(f), "-") {
+			return false
+		}
+		info, err := os.Stat(f)
+		if err != nil || info.IsDir() {
+			return false
+		}
+	}
+	if workingDir != "" {
+		if !filepath.IsAbs(workingDir) || strings.HasPrefix(filepath.Base(workingDir), "-") {
+			return false
+		}
+		info, err := os.Stat(workingDir)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *RollbackWriter) writeRollbackFromComposeConfig(
