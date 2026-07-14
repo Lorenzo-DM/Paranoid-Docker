@@ -76,7 +76,7 @@ func main() {
 
 	imageSaverSvc := service.NewImageSaverService(repo)
 	containerSvc := service.NewContainerService(repo, digestChecker)
-	composeSvc := service.NewComposeStackService(repo, digestChecker, imageSaverSvc)
+	composeSvc := service.NewComposeStackService(repo, digestChecker, imageSaverSvc, service.NewExecRunner())
 
 	jobStore := handler.NewJobStore()
 	saveJobStore := handler.NewSaveJobStore()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ func WriteStackRollback(
 	repo repository.ContainerRepository,
 	includeEnv bool,
 	mode string,
+	runner CommandRunner,
 ) (string, error) {
 	now := time.Now().UTC()
 	ts := now.Format("2006-01-02T15-04-05")
@@ -30,7 +30,7 @@ func WriteStackRollback(
 	}
 
 	if mode == "compose" {
-		return writeRollbackFromComposeConfig(ctx, stack, dir, now)
+		return writeRollbackFromComposeConfig(ctx, stack, dir, now, runner)
 	}
 	return writeRollbackFromInspect(ctx, stack, repo, includeEnv, dir, now)
 }
@@ -48,6 +48,7 @@ func writeRollbackFromComposeConfig(
 	stack model.ComposeStack,
 	dir string,
 	now time.Time,
+	runner CommandRunner,
 ) (string, error) {
 	args := []string{"compose"}
 	for _, f := range stack.ConfigFiles {
@@ -55,11 +56,7 @@ func writeRollbackFromComposeConfig(
 	}
 	args = append(args, "config")
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	if stack.WorkingDir != "" {
-		cmd.Dir = stack.WorkingDir
-	}
-	data, err := cmd.Output()
+	data, err := runner.Output(ctx, stack.WorkingDir, "docker", args...)
 	if err != nil {
 		return dir, fmt.Errorf("docker compose config: %w", err)
 	}
