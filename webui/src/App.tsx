@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { Alert } from '@mantine/core'
+import { IconAlertTriangle } from '@tabler/icons-react'
 
 import { useStacks } from './hooks/useStacks'
 import { useContainers } from './hooks/useContainers'
@@ -28,10 +30,13 @@ interface ContainerModal {
 function App() {
   const { stacks, loading: stacksLoading, error: stacksError, refresh: refreshStacks } = useStacks()
   const { containers, loading: containersLoading, error: containersError, refresh: refreshContainers } = useContainers()
-  const { capabilities, changeMode, refresh: refreshCaps } = useCapabilities()
-  const { log: updateLog, refresh: refreshLog } = useUpdateLog()
+  const { capabilities, error: capsError, changeMode, refresh: refreshCaps } = useCapabilities()
+  const { log: updateLog, error: logError, refresh: refreshLog } = useUpdateLog()
+  const [dismissedWarning, setDismissedWarning] = useState<string | null>(null)
 
   const refresh = () => { refreshStacks(); refreshContainers(); refreshCaps(); refreshLog() }
+
+  const fetchWarning = capsError ?? logError
 
 
   const [updatingStack, setUpdatingStack] = useState<string | null>(null)
@@ -53,6 +58,18 @@ function App() {
       <AppHeader onRefresh={refresh} capabilities={capabilities} onModeChange={changeMode} />
       
       <main className="tbl-wrap">
+        {fetchWarning && fetchWarning !== dismissedWarning && (
+          <Alert
+            icon={<IconAlertTriangle size={16} />}
+            color="yellow"
+            title="Backend request failed"
+            withCloseButton
+            onClose={() => setDismissedWarning(fetchWarning)}
+            mb="md"
+          >
+            {fetchWarning}
+          </Alert>
+        )}
         <div className="title-wrap">
           <h1>Compose stacks</h1>
           <span className="sub">{stacks.length} managed stacks</span>

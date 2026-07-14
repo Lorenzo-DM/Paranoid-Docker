@@ -38,6 +38,9 @@ export interface StackEvent {
   service?: string
   line?: string
   error?: string
+  layer_id?: string
+  current?: number
+  total?: number
 }
 
 export interface Container {
@@ -62,6 +65,8 @@ export interface PullEvent {
   id?: string
   error?: string
   message?: string
+  current?: number
+  total?: number
 }
 
 export interface LogEvent {

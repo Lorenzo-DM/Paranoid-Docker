@@ -34,4 +34,8 @@ type StackEvent struct {
 	Service string `json:"service"`
 	Line    string `json:"line"`
 	Error   string `json:"error,omitempty"`
+	// Layer pull progress (inspect-mode updates only)
+	LayerID string `json:"layer_id,omitempty"`
+	Current int64  `json:"current,omitempty"`
+	Total   int64  `json:"total,omitempty"`
 }

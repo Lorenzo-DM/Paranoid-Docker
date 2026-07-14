@@ -110,13 +110,7 @@ func main() {
 	containerSvc := service.NewContainerService(repo, digestChecker, rollbackWriter)
 	composeSvc := service.NewComposeStackService(repo, digestChecker, imageSaverSvc, runner, rollbackWriter)
 
-	jobStore := handler.NewJobStore()
-	saveJobStore := handler.NewSaveJobStore()
-	stackJobStore := handler.NewStackJobStore()
-	stackSaveJobStore := handler.NewStackJobStore()
-	stackSaveUpdateJobStore := handler.NewStackJobStore()
-
-	h := handler.NewHandler(containerSvc, composeSvc, imageSaverSvc, db, jobStore, saveJobStore, stackJobStore, stackSaveJobStore, stackSaveUpdateJobStore, rollbacksDir, imagesDir)
+	h := handler.NewHandler(containerSvc, composeSvc, imageSaverSvc, db, rollbacksDir, imagesDir)
 
 	h.RegisterRoutes(e)
 

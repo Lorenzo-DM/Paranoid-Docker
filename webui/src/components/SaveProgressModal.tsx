@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Modal, Stack, Progress, Text, Alert, Group, Button, Anchor } from '@mantine/core'
+import { Modal, Stack, Progress, Text, Alert, Group, Button, Anchor, Badge } from '@mantine/core'
+import { useMediaQuery } from '@mantine/hooks'
 import { IconCheck, IconAlertCircle } from '@tabler/icons-react'
 import type { SaveProgress } from '../types/api'
 import { triggerSaveImage, createSaveStatusEventSource, savedImageDownloadUrl } from '../api/containers'
+import { useSSEJob } from '../hooks/useSSEJob'
 
 interface Props {
   containerId: string | null
@@ -18,70 +20,52 @@ function formatBytes(bytes: number): string {
 
 export function SaveProgressModal({ containerId, containerName, onClose }: Props) {
   const [written, setWritten] = useState(0)
-  const [done, setDone] = useState(false)
   const [filename, setFilename] = useState<string | null>(null)
   const [totalSize, setTotalSize] = useState(0)
-  const [error, setError] = useState<string | null>(null)
-  const [running, setRunning] = useState(false)
+  const job = useSSEJob<SaveProgress>()
+  const fullScreen = useMediaQuery('(max-width: 48em)')
 
+  const { reset, start } = job
   useEffect(() => {
     if (!containerId) return
-
     setWritten(0)
-    setDone(false)
     setFilename(null)
     setTotalSize(0)
-    setError(null)
-    setRunning(true)
+    reset()
+    // saving is non-destructive: start immediately on open
+    start({
+      trigger: () => triggerSaveImage(containerId),
+      createEventSource: () => createSaveStatusEventSource(containerId),
+      onProgress: (evt) => setWritten(evt.written_bytes ?? 0),
+      onDone: (evt) => {
+        setFilename(evt.filename ?? null)
+        setTotalSize(evt.size_bytes ?? 0)
+      },
+    })
+  }, [containerId, reset, start])
 
-    let es: EventSource | null = null
-
-    triggerSaveImage(containerId)
-      .then(() => {
-        es = createSaveStatusEventSource(containerId)
-
-        es.addEventListener('progress', (e) => {
-          const evt: SaveProgress = JSON.parse(e.data)
-          setWritten(evt.written_bytes ?? 0)
-        })
-
-        es.addEventListener('done', (e) => {
-          const evt: SaveProgress = JSON.parse(e.data)
-          setFilename(evt.filename ?? null)
-          setTotalSize(evt.size_bytes ?? 0)
-          setDone(true)
-          setRunning(false)
-          es?.close()
-        })
-
-        es.addEventListener('error', (e) => {
-          const evt: SaveProgress = JSON.parse((e as MessageEvent).data ?? '{}')
-          setError(evt.error ?? 'Save failed')
-          setRunning(false)
-          es?.close()
-        })
-      })
-      .catch(e => {
-        setError(e.message)
-        setRunning(false)
-      })
-
-    return () => {
-      es?.close()
-    }
-  }, [containerId])
+  const running = job.phase === 'running' || job.phase === 'reconnecting'
+  const done = job.phase === 'done'
 
   return (
     <Modal
       opened={!!containerId}
       onClose={onClose}
-      title={`Save image: ${containerName}`}
+      fullScreen={fullScreen}
+      title={
+        <Group gap="xs">
+          <Text fw={600}>Save image: {containerName}</Text>
+          {job.phase === 'reconnecting' && (
+            <Badge color="yellow" variant="light" size="sm">reconnecting…</Badge>
+          )}
+        </Group>
+      }
       closeOnClickOutside={!running}
       closeOnEscape={!running}
       size="md"
     >
       <Stack>
-        <Progress value={done ? 100 : 0} animated={running} color={error ? 'red' : done ? 'green' : 'blue'} />
+        <Progress value={done ? 100 : 0} animated={running} color={job.error ? 'red' : done ? 'green' : 'blue'} />
         {running && (
           <Text size="sm" c="dimmed">
             Written: {formatBytes(written)}
@@ -95,9 +79,9 @@ export function SaveProgressModal({ containerId, containerName, onClose }: Props
             </Anchor>
           </Alert>
         )}
-        {error && (
+        {job.error && (
           <Alert icon={<IconAlertCircle size={16} />} color="red" title="Save failed">
-            {error}
+            {job.error}
           </Alert>
         )}
         <Group justify="flex-end">
