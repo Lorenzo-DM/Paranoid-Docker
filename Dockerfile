@@ -12,12 +12,14 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /server ./cmd/server
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /paranoid ./cmd/paranoid
 
 FROM alpine:3.22
 RUN apk add --no-cache docker-cli docker-cli-compose ca-certificates tzdata
 WORKDIR /app
 
 COPY --from=backend /server .
+COPY --from=backend /paranoid /usr/local/bin/paranoid
 COPY --from=frontend /app/webui/dist ./web
 
 RUN mkdir -p rollbacks images

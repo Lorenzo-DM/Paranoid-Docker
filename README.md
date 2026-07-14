@@ -102,6 +102,35 @@ the non-root user must retain read access to the mounted stacks directory.
 - `images/` — Saved image tarballs (named volume)
 - `COMPOSE_STACKS_DIR` — (optional) Mount your compose stacks directory for file-based rollbacks and native `docker compose` updates. Without it, rollbacks and updates use `docker inspect` data only. To enable, uncomment the volume line in `docker-compose.yaml` and set `COMPOSE_STACKS_DIR`
 
+## CLI
+
+The image ships a `paranoid` binary that reuses the same service layer as
+the web UI:
+
+```
+paranoid list stacks|containers        # table, or --json
+paranoid check                         # exit 1 when updates available (cron-friendly)
+paranoid update stack <name>           # rollback snapshot, pull, recreate
+paranoid update container <id> [--include-env] [--save-first]
+paranoid snapshot stack <name>|container <id> [--include-env]
+paranoid save stack <name>|container <id>
+paranoid rollbacks stack|container <name>
+```
+
+Inside the container:
+
+```bash
+docker exec paranoid-docker-update paranoid check
+```
+
+On the host, build it with `go build ./cmd/paranoid` and point the
+directory flags at your mounted volumes, e.g.
+`paranoid --rollbacks-dir /path/to/rollbacks snapshot stack mystack`.
+Persistent flags: `--json`, `--rollbacks-dir`, `--images-dir`, `--db`
+(record operations in the update log, best-effort).
+
+Exit codes: `0` success, `1` updates available (`check`), `2` error.
+
 ## API
 
 Base path: `/api/v1`

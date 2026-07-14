@@ -41,6 +41,10 @@ func (f *fakeContainerService) UpdateContainer(ctx context.Context, id string, c
 	return nil
 }
 
+func (f *fakeContainerService) SnapshotContainer(ctx context.Context, id string, includeEnv bool) (string, error) {
+	return "rollbacks/" + id, nil
+}
+
 func (f *fakeContainerService) StreamLogs(ctx context.Context, id string, w io.Writer) error {
 	_, _ = io.WriteString(w, "log line\n")
 	return nil

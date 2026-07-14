@@ -17,6 +17,7 @@ import (
 type ContainerService interface {
 	GetAll(ctx context.Context) ([]model.Container, error)
 	UpdateContainer(ctx context.Context, id string, progressCh chan<- PullEvent, includeEnv bool) error
+	SnapshotContainer(ctx context.Context, id string, includeEnv bool) (string, error)
 	StreamLogs(ctx context.Context, id string, w io.Writer) error
 	ListRollbacksForContainer(containerName string) ([]model.RollbackFile, error)
 }
@@ -92,25 +93,7 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 	cfg := captureContainerConfig(inspect)
 	captureNetworkDefs(ctx, s.repo, &cfg)
 
-	localDigest := ""
-	imgInspect, err := s.repo.InspectImage(ctx, inspect.Image)
-	if err == nil {
-		for _, rd := range imgInspect.RepoDigests {
-			if _, after, ok := strings.Cut(rd, "@"); ok {
-				localDigest = after
-				break
-			}
-		}
-	}
-
-	pinnedRef := cfg.Image
-	if localDigest != "" {
-		if idx := strings.Index(cfg.Image, ":"); idx != -1 {
-			pinnedRef = cfg.Image[:idx] + "@" + localDigest
-		} else {
-			pinnedRef = cfg.Image + "@" + localDigest
-		}
-	}
+	pinnedRef := s.pinnedRef(ctx, inspect.Image, cfg.Image)
 
 	if _, ok := inspect.Config.Labels["com.docker.compose.project"]; ok {
 		progressCh <- PullEvent{
@@ -157,6 +140,33 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 		Message: newID,
 	}
 	return nil
+}
+
+// pinnedRef resolves the digest-pinned reference for the container's
+// current image, falling back to the plain ref when no digest is known.
+func (s *containerService) pinnedRef(ctx context.Context, imageID, imageRef string) string {
+	imgInspect, err := s.repo.InspectImage(ctx, imageID)
+	if err != nil {
+		return imageRef
+	}
+	for _, rd := range imgInspect.RepoDigests {
+		if _, after, ok := strings.Cut(rd, "@"); ok {
+			return pinImageDigest(imageRef, after)
+		}
+	}
+	return imageRef
+}
+
+// SnapshotContainer writes a rollback compose file for the container
+// without updating it.
+func (s *containerService) SnapshotContainer(ctx context.Context, id string, includeEnv bool) (string, error) {
+	inspect, err := s.repo.InspectContainer(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("inspect: %w", err)
+	}
+	cfg := captureContainerConfig(inspect)
+	captureNetworkDefs(ctx, s.repo, &cfg)
+	return s.rollback.WriteRollbackCompose(cfg, s.pinnedRef(ctx, inspect.Image, cfg.Image), includeEnv)
 }
 
 func (s *containerService) StreamLogs(ctx context.Context, id string, w io.Writer) error {
