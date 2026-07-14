@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,6 +91,7 @@ func (w *RollbackWriter) writeRollbackFromInspect(
 	}
 	allNetworks := map[string]composeNetwork{}
 	allVolumes := map[string]composeVolume{}
+	allCreateCmds := map[string]string{}
 
 	for _, svc := range stack.Services {
 		if svc.ContainerID == "" {
@@ -109,8 +111,14 @@ func (w *RollbackWriter) writeRollbackFromInspect(
 		for name, vol := range volumes {
 			allVolumes[name] = vol
 		}
-		for name := range cs.Networks {
-			allNetworks[name] = composeNetwork{External: true}
+		networks, _ := buildNetworksSection(cfg, cs.Networks, stack.Name)
+		for name, cn := range networks {
+			allNetworks[name] = cn
+			if cn.External {
+				if def, ok := cfg.NetworkDefs[name]; ok {
+					allCreateCmds[name] = networkCreateCommand(def)
+				}
+			}
 		}
 
 		cf.Services[svc.Name] = cs
@@ -132,10 +140,17 @@ func (w *RollbackWriter) writeRollbackFromInspect(
 	for name, s := range cf.Services {
 		imageList = append(imageList, fmt.Sprintf("#   %s: %s", name, s.Image))
 	}
+	sort.Strings(imageList)
+
+	var createCmds []string
+	for _, cmd := range allCreateCmds {
+		createCmds = append(createCmds, cmd)
+	}
+	sort.Strings(createCmds)
 
 	header := fmt.Sprintf(
-		"# Rollback for stack: %s\n# Generated: %s\n# Source: docker inspect\n# Services:\n%s\n\n",
-		stack.Name, now.Format(time.RFC3339), strings.Join(imageList, "\n"),
+		"# Rollback for stack: %s\n# Generated: %s\n# Source: docker inspect\n# Services:\n%s\n%s\n",
+		stack.Name, now.Format(time.RFC3339), strings.Join(imageList, "\n"), networkCommandsHeader(createCmds),
 	)
 
 	destPath := filepath.Join(dir, "docker-compose.yaml")

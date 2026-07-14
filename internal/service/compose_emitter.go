@@ -174,6 +174,128 @@ func buildComposeService(cfg model.ContainerConfig, pinnedImage string, includeE
 	return svc, volumes
 }
 
+// fullNetworkDefinition emits a network the compose project owns: the
+// definition is complete so `docker compose up` recreates it as-is.
+func fullNetworkDefinition(def model.NetworkDef) composeNetwork {
+	labels := map[string]string{}
+	for k, v := range def.Labels {
+		if !strings.HasPrefix(k, "com.docker.compose.") {
+			labels[k] = v
+		}
+	}
+	cn := composeNetwork{
+		Name:       def.Name,
+		Driver:     def.Driver,
+		Internal:   def.Internal,
+		Attachable: def.Attachable,
+		EnableIPv6: def.EnableIPv6,
+		DriverOpts: def.Options,
+	}
+	if len(labels) > 0 {
+		cn.Labels = labels
+	}
+	if len(def.Subnets) > 0 {
+		ipam := &composeIPAM{}
+		for _, s := range def.Subnets {
+			ipam.Config = append(ipam.Config, composeIPAMPool{
+				Subnet:  s.Subnet,
+				Gateway: s.Gateway,
+				IPRange: s.IPRange,
+			})
+		}
+		cn.IPAM = ipam
+	}
+	return cn
+}
+
+// externalNetworkRef emits an external reference to a network not owned
+// by this rollback; networkCreateCommand documents how to recreate it.
+func externalNetworkRef(def model.NetworkDef) composeNetwork {
+	return composeNetwork{External: true, Name: def.Name}
+}
+
+// networkCreateCommand builds the exact `docker network create` command
+// that recreates the captured network.
+func networkCreateCommand(def model.NetworkDef) string {
+	parts := []string{"docker network create"}
+	if def.Driver != "" && def.Driver != "bridge" {
+		parts = append(parts, "--driver "+def.Driver)
+	}
+	for _, s := range def.Subnets {
+		if s.Subnet != "" {
+			parts = append(parts, "--subnet "+s.Subnet)
+		}
+		if s.Gateway != "" {
+			parts = append(parts, "--gateway "+s.Gateway)
+		}
+		if s.IPRange != "" {
+			parts = append(parts, "--ip-range "+s.IPRange)
+		}
+	}
+	if def.Internal {
+		parts = append(parts, "--internal")
+	}
+	if def.Attachable {
+		parts = append(parts, "--attachable")
+	}
+	if def.EnableIPv6 {
+		parts = append(parts, "--ipv6")
+	}
+	optKeys := make([]string, 0, len(def.Options))
+	for k := range def.Options {
+		optKeys = append(optKeys, k)
+	}
+	sort.Strings(optKeys)
+	for _, k := range optKeys {
+		parts = append(parts, fmt.Sprintf("-o %s=%s", k, def.Options[k]))
+	}
+	parts = append(parts, def.Name)
+	return strings.Join(parts, " ")
+}
+
+// buildNetworksSection maps every network the service attaches to into
+// the top-level networks section. Networks whose compose project label
+// matches ownerProject get full definitions; the rest stay external with
+// a recreate command returned for the file header.
+func buildNetworksSection(cfg model.ContainerConfig, attachments map[string]*composeNetworkAttachment, ownerProject string) (map[string]composeNetwork, []string) {
+	if len(attachments) == 0 {
+		return nil, nil
+	}
+	networks := map[string]composeNetwork{}
+	var createCmds []string
+	names := make([]string, 0, len(attachments))
+	for name := range attachments {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		def, ok := cfg.NetworkDefs[name]
+		if !ok {
+			networks[name] = composeNetwork{External: true}
+			continue
+		}
+		if ownerProject != "" && def.Labels["com.docker.compose.project"] == ownerProject {
+			networks[name] = fullNetworkDefinition(def)
+			continue
+		}
+		networks[name] = externalNetworkRef(def)
+		createCmds = append(createCmds, networkCreateCommand(def))
+	}
+	return networks, createCmds
+}
+
+func networkCommandsHeader(createCmds []string) string {
+	if len(createCmds) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# External networks — recreate if missing:\n")
+	for _, cmd := range createCmds {
+		b.WriteString("#   " + cmd + "\n")
+	}
+	return b.String()
+}
+
 func emitPorts(cfg model.ContainerConfig) []string {
 	var ports []string
 	for port, bindings := range cfg.PortBindings() {

@@ -82,7 +82,25 @@ type composeService struct {
 }
 
 type composeNetwork struct {
-	External bool `yaml:"external"`
+	External   bool              `yaml:"external,omitempty"`
+	Name       string            `yaml:"name,omitempty"`
+	Driver     string            `yaml:"driver,omitempty"`
+	Internal   bool              `yaml:"internal,omitempty"`
+	Attachable bool              `yaml:"attachable,omitempty"`
+	EnableIPv6 bool              `yaml:"enable_ipv6,omitempty"`
+	IPAM       *composeIPAM      `yaml:"ipam,omitempty"`
+	DriverOpts map[string]string `yaml:"driver_opts,omitempty"`
+	Labels     map[string]string `yaml:"labels,omitempty"`
+}
+
+type composeIPAM struct {
+	Config []composeIPAMPool `yaml:"config,omitempty"`
+}
+
+type composeIPAMPool struct {
+	Subnet  string `yaml:"subnet,omitempty"`
+	Gateway string `yaml:"gateway,omitempty"`
+	IPRange string `yaml:"ip_range,omitempty"`
 }
 
 type composeVolume struct {
@@ -107,11 +125,7 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 	}
 
 	svc, volumes := buildComposeService(cfg, pinnedImage, includeEnv)
-
-	networks := map[string]composeNetwork{}
-	for name := range svc.Networks {
-		networks[name] = composeNetwork{External: true}
-	}
+	networks, createCmds := buildNetworksSection(cfg, svc.Networks, "")
 
 	cf := composeFile{
 		Services: map[string]composeService{cfg.Name: svc},
@@ -123,8 +137,8 @@ func (w *RollbackWriter) WriteRollbackCompose(cfg model.ContainerConfig, imageDi
 		cf.Volumes = volumes
 	}
 
-	header := fmt.Sprintf("# Rollback for container: %s\n# Generated: %s\n# Previous image: %s\n\n",
-		cfg.Name, now.Format(time.RFC3339), pinnedImage)
+	header := fmt.Sprintf("# Rollback for container: %s\n# Generated: %s\n# Previous image: %s\n%s\n",
+		cfg.Name, now.Format(time.RFC3339), pinnedImage, networkCommandsHeader(createCmds))
 
 	data, err := yaml.Marshal(cf)
 	if err != nil {
