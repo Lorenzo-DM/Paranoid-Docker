@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func WriteStackRollback(
+func (w *RollbackWriter) WriteStackRollback(
 	ctx context.Context,
 	stack model.ComposeStack,
 	repo repository.ContainerRepository,
@@ -24,15 +23,15 @@ func WriteStackRollback(
 ) (string, error) {
 	now := time.Now().UTC()
 	ts := now.Format("2006-01-02T15-04-05")
-	dir := filepath.Join("rollbacks", stack.Name, ts)
+	dir := filepath.Join(w.BaseDir, stack.Name, ts)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir rollback dir: %w", err)
 	}
 
 	if mode == "compose" {
-		return writeRollbackFromComposeConfig(ctx, stack, dir, now)
+		return w.writeRollbackFromComposeConfig(ctx, stack, dir, now)
 	}
-	return writeRollbackFromInspect(ctx, stack, repo, includeEnv, dir, now)
+	return w.writeRollbackFromInspect(ctx, stack, repo, includeEnv, dir, now)
 }
 
 func configFileAccessible(configFiles []string) bool {
@@ -43,7 +42,7 @@ func configFileAccessible(configFiles []string) bool {
 	return err == nil
 }
 
-func writeRollbackFromComposeConfig(
+func (w *RollbackWriter) writeRollbackFromComposeConfig(
 	ctx context.Context,
 	stack model.ComposeStack,
 	dir string,
@@ -55,11 +54,7 @@ func writeRollbackFromComposeConfig(
 	}
 	args = append(args, "config")
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	if stack.WorkingDir != "" {
-		cmd.Dir = stack.WorkingDir
-	}
-	data, err := cmd.Output()
+	data, err := w.Runner.Output(ctx, stack.WorkingDir, "docker", args...)
 	if err != nil {
 		return dir, fmt.Errorf("docker compose config: %w", err)
 	}
@@ -82,7 +77,7 @@ func writeRollbackFromComposeConfig(
 	return dir, nil
 }
 
-func writeRollbackFromInspect(
+func (w *RollbackWriter) writeRollbackFromInspect(
 	ctx context.Context,
 	stack model.ComposeStack,
 	repo repository.ContainerRepository,
@@ -258,8 +253,8 @@ func replaceImageInService(svcNode *yaml.Node, pinnedRef string) {
 	}
 }
 
-func ListStackRollbacks(stackName string) ([]model.RollbackFile, error) {
-	base := filepath.Join("rollbacks", stackName)
+func (w *RollbackWriter) ListStackRollbacks(stackName string) ([]model.RollbackFile, error) {
+	base := filepath.Join(w.BaseDir, stackName)
 	entries, err := os.ReadDir(base)
 	if os.IsNotExist(err) {
 		return []model.RollbackFile{}, nil

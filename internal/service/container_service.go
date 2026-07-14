@@ -26,10 +26,11 @@ type ContainerService interface {
 type containerService struct {
 	repo          repository.ContainerRepository
 	digestChecker DigestChecker
+	rollback      *RollbackWriter
 }
 
-func NewContainerService(repo repository.ContainerRepository, dc DigestChecker) ContainerService {
-	return &containerService{repo: repo, digestChecker: dc}
+func NewContainerService(repo repository.ContainerRepository, dc DigestChecker, rw *RollbackWriter) ContainerService {
+	return &containerService{repo: repo, digestChecker: dc, rollback: rw}
 }
 
 func (s *containerService) GetAll(ctx context.Context) ([]model.Container, error) {
@@ -121,7 +122,7 @@ func (s *containerService) UpdateContainer(ctx context.Context, id string, progr
 	}
 
 	progressCh <- PullEvent{Type: "progress", Status: "Generating rollback compose file..."}
-	if _, err := WriteRollbackCompose(cfg, pinnedRef, includeEnv); err != nil {
+	if _, err := s.rollback.WriteRollbackCompose(cfg, pinnedRef, includeEnv); err != nil {
 		progressCh <- PullEvent{Type: "progress", Status: fmt.Sprintf("WARNING: could not write rollback file: %s", err)}
 	} else {
 		progressCh <- PullEvent{Type: "progress", Status: "Rollback compose file saved"}
@@ -223,7 +224,7 @@ func (s *containerService) StreamLogs(ctx context.Context, id string, w io.Write
 }
 
 func (s *containerService) ListRollbacksForContainer(containerName string) ([]model.RollbackFile, error) {
-	return ListRollbacks(containerName)
+	return s.rollback.ListRollbacks(containerName)
 }
 
 func mapContainer(c types.Container) model.Container {

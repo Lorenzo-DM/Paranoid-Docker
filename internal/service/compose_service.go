@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 
 	"backend/internal/model"
@@ -33,11 +32,13 @@ type composeStackService struct {
 	repo          repository.ContainerRepository
 	digestChecker DigestChecker
 	imageSaver    ImageSaverService
+	runner        CommandRunner
+	rollback      *RollbackWriter
 	rollbackMode  string // "auto" | "compose" | "inspect"
 }
 
-func NewComposeStackService(repo repository.ContainerRepository, dc DigestChecker, is ImageSaverService) ComposeStackService {
-	return &composeStackService{repo: repo, digestChecker: dc, imageSaver: is, rollbackMode: "auto"}
+func NewComposeStackService(repo repository.ContainerRepository, dc DigestChecker, is ImageSaverService, runner CommandRunner, rw *RollbackWriter) ComposeStackService {
+	return &composeStackService{repo: repo, digestChecker: dc, imageSaver: is, runner: runner, rollback: rw, rollbackMode: "auto"}
 }
 
 func (s *composeStackService) GetRollbackMode() string { return s.rollbackMode }
@@ -231,7 +232,7 @@ func (s *composeStackService) SnapshotStack(ctx context.Context, name string, in
 	if err != nil {
 		return "", err
 	}
-	return WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
+	return s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
 }
 
 func (s *composeStackService) findStack(ctx context.Context, name string) (*model.ComposeStack, error) {
@@ -282,7 +283,7 @@ func (s *composeStackService) doSaveStackImages(ctx context.Context, stack *mode
 
 func (s *composeStackService) doUpdateStack(ctx context.Context, stack *model.ComposeStack, eventCh chan<- model.StackEvent, includeEnv bool) error {
 	eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: "Saving rollback snapshot..."}
-	rollbackDir, err := WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
+	rollbackDir, err := s.rollback.WriteStackRollback(ctx, *stack, s.repo, includeEnv, s.effectiveMode(stack.ConfigFiles))
 	if err != nil {
 		eventCh <- model.StackEvent{Type: "progress", Step: "rollback", Line: fmt.Sprintf("WARNING: rollback snapshot failed: %s", err)}
 	} else {
@@ -325,35 +326,17 @@ func (s *composeStackService) runCompose(
 	step string,
 	eventCh chan<- model.StackEvent,
 ) error {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	if workDir != "" {
-		cmd.Dir = workDir
+	emit := func(line string) {
+		eventCh <- model.StackEvent{Type: "progress", Step: step, Line: line}
 	}
+	stdout := &lineWriter{emit: emit}
+	stderr := &lineWriter{emit: emit}
 
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	err := s.runner.Stream(ctx, workDir, stdout, stderr, "docker", args...)
+	stdout.Flush()
+	stderr.Flush()
 
-	if err := cmd.Start(); err != nil {
-		eventCh <- model.StackEvent{Type: "error", Step: step, Error: err.Error()}
-		return err
-	}
-
-	done := make(chan struct{}, 2)
-	stream := func(r io.Reader) {
-		sc := bufio.NewScanner(r)
-		for sc.Scan() {
-			if line := sc.Text(); line != "" {
-				eventCh <- model.StackEvent{Type: "progress", Step: step, Line: line}
-			}
-		}
-		done <- struct{}{}
-	}
-	go stream(stdout)
-	go stream(stderr)
-	<-done
-	<-done
-
-	if err := cmd.Wait(); err != nil {
+	if err != nil {
 		eventCh <- model.StackEvent{Type: "error", Step: step, Error: fmt.Sprintf("docker compose %s: %s", step, err)}
 		return err
 	}
@@ -478,13 +461,7 @@ func (s *composeStackService) streamComposeFileLogs(ctx context.Context, st mode
 		args = append(args, "-f", f)
 	}
 	args = append(args, "logs", "--follow", "--no-color", "--timestamps")
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	if st.WorkingDir != "" {
-		cmd.Dir = st.WorkingDir
-	}
-	cmd.Stdout = w
-	cmd.Stderr = w
-	return cmd.Run()
+	return s.runner.Stream(ctx, st.WorkingDir, w, w, "docker", args...)
 }
 
 func (s *composeStackService) streamInspectLogs(ctx context.Context, st model.ComposeStack, w io.Writer) error {
@@ -516,7 +493,7 @@ func (s *composeStackService) streamInspectLogs(ctx context.Context, st model.Co
 }
 
 func (s *composeStackService) ListRollbacksForStack(name string) ([]model.RollbackFile, error) {
-	return ListStackRollbacks(name)
+	return s.rollback.ListStackRollbacks(name)
 }
 
 func splitConfigFiles(raw string) []string {

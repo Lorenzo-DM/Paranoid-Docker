@@ -29,11 +29,12 @@ type ImageSaverService interface {
 }
 
 type imageSaverService struct {
-	repo repository.ContainerRepository
+	repo    repository.ContainerRepository
+	baseDir string
 }
 
-func NewImageSaverService(repo repository.ContainerRepository) ImageSaverService {
-	return &imageSaverService{repo: repo}
+func NewImageSaverService(repo repository.ContainerRepository, baseDir string) ImageSaverService {
+	return &imageSaverService{repo: repo, baseDir: baseDir}
 }
 
 func (s *imageSaverService) SaveImage(ctx context.Context, containerID string, progressCh chan<- SaveProgress) error {
@@ -51,7 +52,6 @@ func (s *imageSaverService) SaveImage(ctx context.Context, containerID string, p
 		imageRef = inspect.Config.Image
 	}
 
-
 	shortDigest := imageID
 	if strings.HasPrefix(shortDigest, "sha256:") {
 		shortDigest = shortDigest[7:15]
@@ -60,12 +60,12 @@ func (s *imageSaverService) SaveImage(ctx context.Context, containerID string, p
 	safeName = strings.ReplaceAll(safeName, ":", "_")
 	filename := fmt.Sprintf("%s_%s.tar.gz", safeName, shortDigest)
 
-	if err := os.MkdirAll("images", 0o755); err != nil {
+	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
 		progressCh <- SaveProgress{Type: "error", Error: fmt.Sprintf("create images dir: %s", err)}
 		return err
 	}
 
-	path := filepath.Join("images", filename)
+	path := filepath.Join(s.baseDir, filename)
 	f, err := os.Create(path)
 	if err != nil {
 		progressCh <- SaveProgress{Type: "error", Error: fmt.Sprintf("create file: %s", err)}
@@ -115,14 +115,14 @@ func (s *imageSaverService) SaveImage(ctx context.Context, containerID string, p
 }
 
 func (s *imageSaverService) ListSavedImages() ([]model.SavedImage, error) {
-	entries, err := os.ReadDir("images")
+	entries, err := os.ReadDir(s.baseDir)
 	if os.IsNotExist(err) {
 		return []model.SavedImage{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
- 
+
 	var images []model.SavedImage
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") {
@@ -134,7 +134,7 @@ func (s *imageSaverService) ListSavedImages() ([]model.SavedImage, error) {
 		}
 		images = append(images, model.SavedImage{
 			Filename:  e.Name(),
-			Path:      filepath.Join("images", e.Name()),
+			Path:      filepath.Join(s.baseDir, e.Name()),
 			ImageRef:  filenameToImageRef(e.Name()),
 			SizeBytes: info.Size(),
 			SavedAt:   info.ModTime(),
@@ -153,7 +153,6 @@ func filenameToImageRef(filename string) string {
 	return name
 }
 
-
 func (sp SaveProgress) ToSSEEvent() string {
 	event := sp.Type
 	if event == "" {
@@ -162,7 +161,6 @@ func (sp SaveProgress) ToSSEEvent() string {
 	return fmt.Sprintf("event: %s\ndata: {\"written_bytes\":%d,\"message\":%q,\"filename\":%q,\"size_bytes\":%d,\"error\":%q}\n\n",
 		event, sp.WrittenBytes, sp.Message, sp.Filename, sp.SizeBytes, sp.Error)
 }
-
 
 func saveTimeFromFilename(_ string) time.Time {
 	return time.Now()

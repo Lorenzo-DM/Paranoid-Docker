@@ -74,9 +74,21 @@ func main() {
 	repo := repository.NewContainerRepository(dockerCli)
 	digestChecker := service.NewDigestChecker(repo)
 
-	imageSaverSvc := service.NewImageSaverService(repo)
-	containerSvc := service.NewContainerService(repo, digestChecker)
-	composeSvc := service.NewComposeStackService(repo, digestChecker, imageSaverSvc)
+	rollbacksDir := os.Getenv("ROLLBACKS_DIR")
+	if rollbacksDir == "" {
+		rollbacksDir = "rollbacks"
+	}
+	imagesDir := os.Getenv("IMAGES_DIR")
+	if imagesDir == "" {
+		imagesDir = "images"
+	}
+
+	runner := service.NewExecRunner()
+	rollbackWriter := service.NewRollbackWriter(rollbacksDir, runner)
+
+	imageSaverSvc := service.NewImageSaverService(repo, imagesDir)
+	containerSvc := service.NewContainerService(repo, digestChecker, rollbackWriter)
+	composeSvc := service.NewComposeStackService(repo, digestChecker, imageSaverSvc, runner, rollbackWriter)
 
 	jobStore := handler.NewJobStore()
 	saveJobStore := handler.NewSaveJobStore()
@@ -84,7 +96,7 @@ func main() {
 	stackSaveJobStore := handler.NewStackJobStore()
 	stackSaveUpdateJobStore := handler.NewStackJobStore()
 
-	h := handler.NewHandler(containerSvc, composeSvc, imageSaverSvc, db, jobStore, saveJobStore, stackJobStore, stackSaveJobStore, stackSaveUpdateJobStore)
+	h := handler.NewHandler(containerSvc, composeSvc, imageSaverSvc, db, jobStore, saveJobStore, stackJobStore, stackSaveJobStore, stackSaveUpdateJobStore, rollbacksDir, imagesDir)
 
 	h.RegisterRoutes(e)
 

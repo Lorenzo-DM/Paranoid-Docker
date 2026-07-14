@@ -26,6 +26,8 @@ type Handler struct {
 	stackJobStore           *StackJobStore
 	stackSaveJobStore       *StackJobStore
 	stackSaveUpdateJobStore *StackJobStore
+	rollbacksDir            string
+	imagesDir               string
 }
 
 func NewHandler(
@@ -38,6 +40,8 @@ func NewHandler(
 	stjs *StackJobStore,
 	stSaveJs *StackJobStore,
 	stSaveUpJs *StackJobStore,
+	rollbacksDir string,
+	imagesDir string,
 ) *Handler {
 	return &Handler{
 		containerService:        cs,
@@ -49,6 +53,8 @@ func NewHandler(
 		stackJobStore:           stjs,
 		stackSaveJobStore:       stSaveJs,
 		stackSaveUpdateJobStore: stSaveUpJs,
+		rollbacksDir:            rollbacksDir,
+		imagesDir:               imagesDir,
 	}
 }
 
@@ -84,8 +90,6 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 
 	api.GET("/update-log", h.GetUpdateLog)
 }
-
-
 
 func (h *Handler) ListStacks(c *echo.Context) error {
 	stacks, err := h.composeService.ListStacks(c.Request().Context())
@@ -180,7 +184,6 @@ func (h *Handler) SnapshotStack(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"dir": dir})
 }
 
-
 func (h *Handler) streamStackJobStore(c *echo.Context, name string, store *StackJobStore) error {
 	sseHeaders(c)
 	flusher, ok := c.Response().(http.Flusher)
@@ -271,14 +274,20 @@ func (h *Handler) ListStackRollbacks(c *echo.Context) error {
 func (h *Handler) DownloadStackRollback(c *echo.Context) error {
 	name := c.Param("name")
 	rest := c.Param("*")
-	path := filepath.Join("rollbacks", name, filepath.Clean(rest))
+	path := filepath.Join(h.rollbacksDir, name, filepath.Clean(rest))
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
-	return c.File(path)
+	return serveFile(c, path)
 }
 
-
+// serveFile serves a file from an arbitrary (possibly absolute) path.
+// echo's c.File resolves against its fs.FS rooted at the working
+// directory, which breaks for injected absolute dirs.
+func serveFile(c *echo.Context, path string) error {
+	http.ServeFile(c.Response(), c.Request(), path)
+	return nil
+}
 
 func (h *Handler) ListContainers(c *echo.Context) error {
 	all, err := h.containerService.GetAll(c.Request().Context())
@@ -414,11 +423,12 @@ func (h *Handler) DownloadRollback(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
-	path := filepath.Join("rollbacks", name, filepath.Base(filename))
-	return c.File(path)
+	path := filepath.Join(h.rollbacksDir, name, filepath.Base(filename))
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
+	}
+	return serveFile(c, path)
 }
-
-
 
 func (h *Handler) TriggerSaveImage(c *echo.Context) error {
 	id := c.Param("id")
@@ -486,15 +496,13 @@ func (h *Handler) ListSavedImages(c *echo.Context) error {
 
 func (h *Handler) DownloadImage(c *echo.Context) error {
 	filename := filepath.Base(c.Param("filename"))
-	path := filepath.Join("images", filename)
+	path := filepath.Join(h.imagesDir, filename)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "file not found"})
 	}
 	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	return c.File(path)
+	return serveFile(c, path)
 }
-
-
 
 func (h *Handler) GetCapabilities(c *echo.Context) error {
 	caps := h.composeService.GetCapabilities(c.Request().Context())
