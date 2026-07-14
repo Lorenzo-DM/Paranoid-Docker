@@ -19,5 +19,10 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // the data hooks fetch on mount and reset modal state on open;
+      // both intentionally set state from effects
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])
