@@ -1200,3 +1200,62 @@ h2 {
 .btn.danger-btn:hover {
   background: color-mix(in oklab, var(--danger) 28%, transparent);
 }
+/* ---------- responsive ---------- */
+
+/* tables scroll horizontally inside their shell instead of the page */
+@media (max-width: 62em) {
+  .tbl-shell {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .wtable {
+    min-width: 640px;
+  }
+}
+
+@media (max-width: 48em) {
+  .tbl-wrap {
+    padding: 12px;
+  }
+
+  .tbl-shell {
+    margin-bottom: 16px;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .topbar .title {
+    font-size: 15px;
+  }
+
+  .topbar .sub {
+    display: none;
+  }
+
+  .title-wrap {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .title-wrap h1 {
+    font-size: 18px;
+  }
+
+  .search-wrap {
+    width: 100%;
+  }
+
+  .search.search-with-icon {
+    width: 100%;
+  }
+
+  .bulkbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+}
