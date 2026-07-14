@@ -11,8 +11,6 @@ import (
 	"backend/internal/repository"
 
 	dockertypes "github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
 )
 
 type ComposeStackService interface {
@@ -375,59 +373,11 @@ func (s *composeStackService) doInspectBasedUpdate(ctx context.Context, stack *m
 			}
 		}
 
-		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Stopping...", svc.Name)}
-		timeout := 10
-		if err := s.repo.StopContainer(ctx, svc.ContainerID, &timeout); err != nil {
-			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR stopping: %s", svc.Name, err)}
+		if _, err := recreateContainer(ctx, s.repo, cfg, func(line string) {
+			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] %s", svc.Name, line)}
+		}); err != nil {
+			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR: %s", svc.Name, err)}
 			continue
-		}
-
-		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Removing...", svc.Name)}
-		if err := s.repo.RemoveContainer(ctx, svc.ContainerID); err != nil {
-			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR removing: %s", svc.Name, err)}
-			continue
-		}
-
-		containerCfg := &container.Config{
-			Image:      cfg.Image,
-			Cmd:        cfg.Cmd(),
-			Entrypoint: cfg.Entrypoint(),
-			Env:        cfg.Env(),
-			Labels:     cfg.Labels(),
-		}
-		hostCfg := &container.HostConfig{
-			Binds:         cfg.Binds(),
-			PortBindings:  cfg.PortBindings(),
-			NetworkMode:   cfg.NetworkMode(),
-			RestartPolicy: cfg.RestartPolicy(),
-			AutoRemove:    cfg.AutoRemove(),
-		}
-
-		var netCfg *network.NetworkingConfig
-		primaryNet := string(cfg.NetworkMode())
-		if primaryNet != "" && !isDefaultNetwork(primaryNet) {
-			netCfg = &network.NetworkingConfig{
-				EndpointsConfig: map[string]*network.EndpointSettings{
-					primaryNet: {},
-				},
-			}
-		}
-
-		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Creating...", svc.Name)}
-		newID, err := s.repo.CreateContainer(ctx, cfg.Name, containerCfg, hostCfg, netCfg)
-		if err != nil {
-			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR creating: %s", svc.Name, err)}
-			continue
-		}
-
-		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Starting...", svc.Name)}
-		if err := s.repo.StartContainer(ctx, newID); err != nil {
-			eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] ERROR starting: %s", svc.Name, err)}
-			continue
-		}
-
-		for _, netName := range cfg.Networks() {
-			_ = s.repo.ConnectNetwork(ctx, netName, newID, nil)
 		}
 
 		eventCh <- model.StackEvent{Type: "progress", Step: "up", Line: fmt.Sprintf("[%s] Updated successfully", svc.Name)}
