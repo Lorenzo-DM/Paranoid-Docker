@@ -36,7 +36,7 @@ func testContainerConfig() model.ContainerConfig {
 			"mynet": {},
 		},
 		Mounts: []types.MountPoint{
-			{Type: "volume", Name: "appvol", Destination: "/var/lib/app"},
+			{Type: "volume", Name: "appvol", Destination: "/var/lib/app", RW: true},
 		},
 	}
 }

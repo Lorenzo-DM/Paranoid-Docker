@@ -105,48 +105,12 @@ func (w *RollbackWriter) writeRollbackFromInspect(
 		captureNetworkDefs(ctx, repo, &cfg)
 		pinnedImage := pinImageDigest(svc.Image, svc.LocalDigest)
 
-		var env []string
-		if includeEnv {
-			env = cfg.Env()
+		cs, volumes := buildComposeService(cfg, pinnedImage, includeEnv)
+		for name, vol := range volumes {
+			allVolumes[name] = vol
 		}
-
-		cs := composeService{
-			Image:         pinnedImage,
-			ContainerName: cfg.Name,
-			Restart:       restartPolicyName(string(cfg.RestartPolicy().Name)),
-			Environment:   env,
-			Networks:      cfg.Networks(),
-		}
-
-		for port, bindings := range cfg.PortBindings() {
-			for _, b := range bindings {
-				if b.HostPort != "" {
-					cs.Ports = append(cs.Ports, fmt.Sprintf("%s:%s/%s", b.HostPort, port.Port(), port.Proto()))
-				}
-			}
-		}
-
-		cs.Volumes = append(cs.Volumes, cfg.Binds()...)
-
-		for _, m := range cfg.Mounts {
-			if m.Type == "volume" && m.Name != "" {
-				cs.Volumes = append(cs.Volumes, fmt.Sprintf("%s:%s", m.Name, m.Destination))
-				allVolumes[m.Name] = composeVolume{External: true}
-			}
-		}
-
-		labels := map[string]string{}
-		for k, v := range cfg.Labels() {
-			if !strings.HasPrefix(k, "com.docker.compose.") {
-				labels[k] = v
-			}
-		}
-		if len(labels) > 0 {
-			cs.Labels = labels
-		}
-
-		for _, n := range cfg.Networks() {
-			allNetworks[n] = composeNetwork{External: true}
+		for name := range cs.Networks {
+			allNetworks[name] = composeNetwork{External: true}
 		}
 
 		cf.Services[svc.Name] = cs
